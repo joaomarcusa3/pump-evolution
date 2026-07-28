@@ -1,0 +1,6 @@
+name: broken-agent
+modelId: gpt-4o
+allowedTools:
+  - search
+   - calculator
+  bad-indent: [unclosed

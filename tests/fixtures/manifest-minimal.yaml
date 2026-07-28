@@ -1,0 +1,4 @@
+name: minimal-agent
+modelId: anthropic.claude-sonnet-4
+allowedTools:
+  - search

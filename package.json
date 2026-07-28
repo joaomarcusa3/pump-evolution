@@ -1,0 +1,72 @@
+{
+  "name": "@a3data/pump-evolution",
+  "version": "0.0.1",
+  "description": "Plug-and-play TypeScript/Node telemetry SDK for AI agents — emits governed usage telemetry (identity, tokens, cost, tools, compliance) to Control Tower AI as OpenTelemetry GenAI spans. Zero internal cta-* dependencies.",
+  "author": "A3Data",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joaomarcusa3/pump-evolution.git"
+  },
+  "homepage": "https://github.com/joaomarcusa3/pump-evolution#readme",
+  "bugs": {
+    "url": "https://github.com/joaomarcusa3/pump-evolution/issues"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepare": "tsup",
+    "clean": "rimraf dist .turbo *.tsbuildinfo",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo:local": "pnpm run build && node scripts/local-demo.mjs"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0",
+    "yaml": "^2.6.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.750.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-bedrock-runtime": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.750.0",
+    "@eslint/js": "^9.39.4",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "eslint": "^9.15.0",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.6"
+  }
+}

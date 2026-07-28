@@ -1,0 +1,18 @@
+name: latam-credit-analyzer
+modelId: gpt-4o
+allowedTools:
+  - search
+  - calculator
+riskTier: T2-medium
+owner:
+  email: vincenzo@topaz.com
+  team: data-engineering
+  costCenter: OWNER-CC-999
+costCenter: LATAM-CC-001
+squad: data-engineering
+dataClassification: internal
+runtime:
+  external: true
+  telemetry:
+    otelEndpoint: https://otel.cta.topaz.aws.com/v1/traces
+    serviceAccountId: svc-latam-credit-analyzer

@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+
+# Tooling caches
+.turbo/
+
+# Packaged tarballs
+*.tgz
+
+# Env (nunca commitar segredos)
+.env
+.env.local
+
+# OS
+.DS_Store
