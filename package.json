@@ -18,11 +18,11 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joaomarcusa3/pump-evolution.git"
+    "url": "git+https://gitlab.topazevolution.com/topaz-ia/templates/sdk.git"
   },
-  "homepage": "https://github.com/joaomarcusa3/pump-evolution#readme",
+  "homepage": "https://gitlab.topazevolution.com/topaz-ia/templates/sdk/-/blob/main/README.md",
   "bugs": {
-    "url": "https://github.com/joaomarcusa3/pump-evolution/issues"
+    "url": "https://gitlab.topazevolution.com/topaz-ia/templates/sdk/-/issues"
   },
   "engines": {
     "node": ">=20.11.0"
