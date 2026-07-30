@@ -1,4 +1,4 @@
-# Contributing to `@a3data/pump-evolution`
+# Contributing to `@topaz-ia/pump-evolution`
 
 Telemetry SDK for AI agents and MCP servers. This document covers local
 development, standards, and the release process.
@@ -9,20 +9,20 @@ Requires Node.js 20.11+ and pnpm 9+. From the monorepo root:
 
 ```bash
 pnpm install
-pnpm --filter @a3data/pump-evolution build
+pnpm --filter @topaz-ia/pump-evolution build
 ```
 
 ## Scripts
 
 | Script                                             | O que faz                                        |
 | -------------------------------------------------- | ------------------------------------------------ |
-| `pnpm --filter @a3data/pump-evolution build`       | Bundle ESM+CJS + `.d.ts`/`.d.cts` (tsup)         |
-| `pnpm --filter @a3data/pump-evolution test`        | Testes (vitest)                                  |
-| `pnpm --filter @a3data/pump-evolution typecheck`   | `tsc --noEmit` (strict)                          |
-| `pnpm --filter @a3data/pump-evolution lint`        | ESLint                                           |
-| `pnpm --filter @a3data/pump-evolution docs`        | Gera a documentação de API (typedoc → `docs/`)   |
-| `pnpm --filter @a3data/pump-evolution api:extract` | Atualiza o relatório de API (`etc/*.api.md`)     |
-| `pnpm --filter @a3data/pump-evolution api:check`   | Verifica que a API pública não mudou sem revisão |
+| `pnpm --filter @topaz-ia/pump-evolution build`       | Bundle ESM+CJS + `.d.ts`/`.d.cts` (tsup)         |
+| `pnpm --filter @topaz-ia/pump-evolution test`        | Testes (vitest)                                  |
+| `pnpm --filter @topaz-ia/pump-evolution typecheck`   | `tsc --noEmit` (strict)                          |
+| `pnpm --filter @topaz-ia/pump-evolution lint`        | ESLint                                           |
+| `pnpm --filter @topaz-ia/pump-evolution docs`        | Gera a documentação de API (typedoc → `docs/`)   |
+| `pnpm --filter @topaz-ia/pump-evolution api:extract` | Atualiza o relatório de API (`etc/*.api.md`)     |
+| `pnpm --filter @topaz-ia/pump-evolution api:check`   | Verifica que a API pública não mudou sem revisão |
 
 ## Padrões de código
 
@@ -51,7 +51,7 @@ A superfície pública é o barrel `src/index.ts`. Exports marcados `@internal` 
 plumbing de baixo nível e podem mudar sem aviso. Ao alterar a API pública:
 
 ```bash
-pnpm --filter @a3data/pump-evolution api:extract   # atualiza etc/pump-evolution.api.md
+pnpm --filter @topaz-ia/pump-evolution api:extract   # atualiza etc/pump-evolution.api.md
 ```
 
 Commite o `.api.md` junto. O CI roda `api:check` e falha se o relatório divergir —
