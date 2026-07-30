@@ -159,23 +159,11 @@ def record_tool_use_spans(
 # ─── Tracing manual (framework-agnóstico) ──────────────────────────────────────
 
 
-def trace_tool(tracer: Tracer, name: str, fn: Callable[[], _T]) -> _T:
-    """Embrulha `fn` num span `execute_tool` (Requirement 5.2) pra instrumentar
-    tools que não passam pelo Bedrock. O span aninha sob o span ativo. Tempo de
-    vida = execução da função; pra `fn` async, termina quando o awaitable
-    concluir. Erros são registrados e o erro ORIGINAL é relançado inalterado. Se
-    iniciar o span falhar, `fn` ainda roda (telemetria nunca bloqueia o agente)."""
-    tool_name = _read_string(name) or "unknown_tool"
-    try:
-        span = tracer.start_span(
-            f"{OPERATION_EXECUTE_TOOL} {tool_name}", kind=SpanKind.INTERNAL
-        )
-        span.set_attribute(GEN_AI_OPERATION_NAME, OPERATION_EXECUTE_TOOL)
-        span.set_attribute(GEN_AI_TOOL_NAME, tool_name)
-    except Exception:
-        # Não deu pra iniciar o span — roda a função sem traçar.
-        return fn()
-
+def run_with_span(span: Span, fn: Callable[[], _T]) -> _T:
+    """Roda `fn` com o `span` (já iniciado) como tempo de vida: pra `fn` async,
+    termina quando o awaitable concluir. Erros são registrados e o erro ORIGINAL
+    é relançado inalterado. Helper compartilhado por `trace_tool` e pela
+    instrumentação MCP (`trace_mcp_tool`)."""
     try:
         result = fn()
     except BaseException as error:
@@ -203,3 +191,23 @@ def trace_tool(tracer: Tracer, name: str, fn: Callable[[], _T]) -> _T:
     span.set_status(Status(StatusCode.OK))
     span.end()
     return result
+
+
+def trace_tool(tracer: Tracer, name: str, fn: Callable[[], _T]) -> _T:
+    """Embrulha `fn` num span `execute_tool` (Requirement 5.2) pra instrumentar
+    tools que não passam pelo Bedrock. O span aninha sob o span ativo. Tempo de
+    vida = execução da função; pra `fn` async, termina quando o awaitable
+    concluir. Erros são registrados e o erro ORIGINAL é relançado inalterado. Se
+    iniciar o span falhar, `fn` ainda roda (telemetria nunca bloqueia o agente)."""
+    tool_name = _read_string(name) or "unknown_tool"
+    try:
+        span = tracer.start_span(
+            f"{OPERATION_EXECUTE_TOOL} {tool_name}", kind=SpanKind.INTERNAL
+        )
+        span.set_attribute(GEN_AI_OPERATION_NAME, OPERATION_EXECUTE_TOOL)
+        span.set_attribute(GEN_AI_TOOL_NAME, tool_name)
+    except Exception:
+        # Não deu pra iniciar o span — roda a função sem traçar.
+        return fn()
+
+    return run_with_span(span, fn)
