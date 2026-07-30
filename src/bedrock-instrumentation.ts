@@ -114,7 +114,7 @@ export interface SecurityConfig {
 }
 
 /** Symbol flag marking a client as already instrumented (idempotency guard). */
-const INSTRUMENTED = Symbol.for('@a3data/pump-evolution.bedrock.instrumented');
+const INSTRUMENTED = Symbol.for('@topaz-ia/pump-evolution.bedrock.instrumented');
 
 /**
  * Instruments a `BedrockRuntimeClient` in place and returns the same instance.

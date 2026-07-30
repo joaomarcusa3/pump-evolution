@@ -25,6 +25,7 @@ import {
   CTA_ALLOWED_TOOLS,
   CTA_COST_CENTER,
   CTA_DATA_CLASSIFICATION,
+  CTA_ITEM_KIND,
   CTA_RISK_TIER,
   CTA_SQUAD,
   GEN_AI_AGENT_ID,
@@ -34,6 +35,7 @@ import {
 import type {
   AgentManifest,
   DataClassification,
+  ItemKind,
   ManifestOwner,
   ManifestRuntime,
   ManifestTelemetry,
@@ -61,6 +63,12 @@ const VALID_RISK_TIERS: readonly RiskTier[] = [
   'T3-sensitive',
   'T4-autonomous',
 ];
+
+/** Item kinds the SDK accepts. `agent` (default) has a model; `mcp` does not. */
+const VALID_ITEM_KINDS: readonly ItemKind[] = ['agent', 'mcp'];
+
+/** Default kind when the manifest omits it (documented semantic default). */
+const DEFAULT_ITEM_KIND: ItemKind = 'agent';
 
 // ─── Small narrowing / description helpers ────────────────────────────────────
 
@@ -229,7 +237,19 @@ function toManifest(value: unknown, origin: string): AgentManifest {
   }
 
   const name = requireNonEmptyString(value.name, 'name', origin);
-  const modelId = requireNonEmptyString(value.modelId, 'modelId', origin);
+
+  // `kind` governs whether modelId is required. Absent → 'agent' (documented
+  // semantic default, backward-compatible with existing agent manifests).
+  const kind = optionalEnum(value.kind, VALID_ITEM_KINDS, 'kind', origin) ?? DEFAULT_ITEM_KIND;
+
+  // modelId: required for agents (they invoke a model); not applicable to MCP
+  // servers (tool providers, no model). Zero fallback: an agent without modelId
+  // fails fast; an MCP with a modelId keeps it (harmless), else omits it.
+  const modelId =
+    kind === 'mcp'
+      ? optionalNonEmptyString(value.modelId, 'modelId', origin)
+      : requireNonEmptyString(value.modelId, 'modelId', origin);
+
   const allowedTools = requireStringArray(value.allowedTools, 'allowedTools', origin);
 
   const riskTier = optionalEnum(value.riskTier, VALID_RISK_TIERS, 'riskTier', origin);
@@ -246,7 +266,8 @@ function toManifest(value: unknown, origin: string): AgentManifest {
 
   return {
     name,
-    modelId,
+    kind,
+    ...(modelId !== undefined ? { modelId } : {}),
     allowedTools,
     ...(riskTier !== undefined ? { riskTier } : {}),
     ...(owner !== undefined ? { owner } : {}),
@@ -278,12 +299,17 @@ type MutableResourceAttributes = {
  * fabricated default.
  */
 export function manifestToResourceAttributes(manifest: AgentManifest): ResourceAttributes {
+  const kind: ItemKind = manifest.kind ?? DEFAULT_ITEM_KIND;
   const attributes: MutableResourceAttributes = {
     [SERVICE_NAME]: manifest.name,
     [GEN_AI_AGENT_ID]: manifest.name,
-    [GEN_AI_REQUEST_MODEL]: manifest.modelId,
+    [CTA_ITEM_KIND]: kind,
     [CTA_ALLOWED_TOOLS]: [...manifest.allowedTools],
   };
+
+  // gen_ai.request.model only when the manifest declares a model (agents).
+  // MCP servers have no model → the attribute is omitted, never placeholder-filled.
+  if (manifest.modelId !== undefined) attributes[GEN_AI_REQUEST_MODEL] = manifest.modelId;
 
   const costCenter = manifest.costCenter ?? manifest.owner?.costCenter;
   if (costCenter !== undefined) attributes[CTA_COST_CENTER] = costCenter;

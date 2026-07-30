@@ -1,5 +1,5 @@
 /**
- * `@a3data/pump-evolution` — public API surface.
+ * `@topaz-ia/pump-evolution` — public API surface.
  *
  * This barrel is the single entry point external agent developers import from.
  * Task 1 establishes the shared contracts and semantic-convention constants;
@@ -27,6 +27,7 @@ export {
 export type { CreateTracerProviderOptions } from './tracer.js';
 export {
   applyIdentityToSpan,
+  claimsToUserContext,
   getCurrentUser,
   parseIdentityHeaders,
   withUser,
@@ -38,6 +39,10 @@ export type {
   ComplianceConfig,
   SecurityConfig,
 } from './bedrock-instrumentation.js';
+export { traceMcpTool, instrumentMcpServer } from './mcp-instrumentation.js';
+export type { McpToolTracerDeps } from './mcp-instrumentation.js';
+export { ConsumerTokenVerifier } from './consumer-auth.js';
+export type { ConsumerAuthConfig, ConsumerAuthResult, JwksFetchLike } from './consumer-auth.js';
 export { init, PumpEvolution } from './pump-evolution.js';
 export type { PumpInitInternals } from './pump-evolution.js';
 export {
@@ -87,9 +92,11 @@ export type {
   ComplianceStatus,
   ComplianceSummary,
   DataClassification,
+  ItemKind,
   ManifestOwner,
   ManifestRuntime,
   ManifestTelemetry,
+  McpToolInvocation,
   PumpConfig,
   PumpHandle,
   ResourceAttributes,

@@ -58,6 +58,7 @@ describe('pump-evolution scaffold contracts', () => {
       'service.name': 'latam-credit-analyzer',
       'gen_ai.agent.id': 'latam-credit-analyzer',
       'gen_ai.request.model': 'gpt-4o',
+      'cta.item_kind': 'agent',
       'cta.cost_center': 'LATAM-CC-001',
       'cta.allowed_tools': ['search'],
     };

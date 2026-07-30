@@ -1,0 +1,12 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs",
+  "tsconfig": "tsconfig.json",
+  "name": "@topaz-ia/pump-evolution",
+  "readme": "README.md",
+  "excludeInternal": true,
+  "excludePrivate": true,
+  "githubPages": false,
+  "hideGenerator": true
+}

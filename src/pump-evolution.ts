@@ -32,11 +32,16 @@ import { resolveTelemetryConfig } from './config-resolver.js';
 import { PUMP_EVOLUTION_ENABLED_ENV } from './constants.js';
 import { withUser } from './identity-context.js';
 import { loadManifest, manifestToResourceAttributes } from './manifest-loader.js';
+import {
+  traceMcpTool,
+  instrumentMcpServer,
+  type McpToolTracerDeps,
+} from './mcp-instrumentation.js';
 import { createOtlpBatchProcessor, type TelemetryLogger } from './otlp-exporter.js';
 import { ServiceAccountTokenProvider } from './token-provider.js';
 import { traceTool } from './tool-tracer.js';
 import { createTracerProvider, getTracer } from './tracer.js';
-import type { PumpConfig, PumpHandle, UserContext } from './types.js';
+import type { McpToolInvocation, PumpConfig, PumpHandle, UserContext } from './types.js';
 
 // ─── Test / advanced seams ─────────────────────────────────────────────────────
 
@@ -70,6 +75,8 @@ function noopHandle(): PumpHandle {
   return {
     instrumentBedrock: (client) => client,
     traceTool: (_name, fn) => fn(),
+    traceMcpTool: (_invocation, fn) => fn(),
+    instrumentMcpServer: (server) => server,
     withUser: (_ctx, fn) => fn(),
     shutdown: () => Promise.resolve(),
   };
@@ -142,15 +149,28 @@ export function init(config: PumpConfig, internals: PumpInitInternals = {}): Pum
 
   // OWASP LLM runtime scanning (Fatia 1b): ON by default when enabled; opt-out
   // via `config.security.enabled = false`. Reads content locally, emits only
-  // redacted findings.
+  // redacted findings. `securityEnabled` is resolved once (explicit boolean) and
+  // shared by the Bedrock instrumentation and the MCP tool tracer.
+  const securityEnabled: boolean = config.security?.enabled ?? true;
   const security: SecurityConfig = {
-    enabled: config.security?.enabled ?? true,
+    enabled: securityEnabled,
     ...(config.security?.maxTotalTokens !== undefined
       ? { maxTotalTokens: config.security.maxTotalTokens }
       : {}),
   };
 
   const setTimeoutFn = internals.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
+
+  // Shared deps for the MCP tool tracer + auto-instrumentation (governed spans
+  // for MCP servers, so the CTA maps MCPs in the same pipeline as agents).
+  const mcpDeps: McpToolTracerDeps = {
+    tracer,
+    allowedTools: manifest.allowedTools,
+    ...(manifest.dataClassification !== undefined
+      ? { dataClassification: manifest.dataClassification }
+      : {}),
+    security: { enabled: securityEnabled },
+  };
 
   return {
     instrumentBedrock<C>(client: C): C {
@@ -167,6 +187,12 @@ export function init(config: PumpConfig, internals: PumpInitInternals = {}): Pum
     },
     traceTool<T>(name: string, fn: () => T): T {
       return traceTool(tracer, name, fn);
+    },
+    traceMcpTool<T>(invocation: McpToolInvocation, fn: () => T): T {
+      return traceMcpTool(mcpDeps, invocation, fn);
+    },
+    instrumentMcpServer<S>(server: S): S {
+      return instrumentMcpServer(mcpDeps, server);
     },
     withUser<T>(ctx: UserContext, fn: () => T): T {
       return withUser(ctx, fn);

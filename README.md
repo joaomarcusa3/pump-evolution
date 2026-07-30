@@ -1,56 +1,66 @@
 # pump-evolution
 
-SDK de telemetria **plug-and-play** para agentes de IA (TypeScript/Node).
+SDK de telemetria para agentes de IA e servidores MCP (TypeScript/Node). Por
+invocação, emite um span com identidade do usuário, tools e status de
+compliance/segurança (OWASP). Agentes emitem também tokens, modelo e latência; o
+**custo (USD) é derivado no CTA** (tokens × modelo) — o SDK não calcula custo. **MCP
+não tem modelo**: a unidade é a chamada de tool (sem tokens/custo).
 
-Você embrulha seu cliente Amazon Bedrock com o pump e, a cada invocação, ele emite
-automaticamente um span com **identidade do usuário, tokens, custo, latência, ferramentas
-usadas e status de compliance/segurança (OWASP)** para o **Control Tower AI**.
+- Não altera a resposta do Bedrock/MCP — só observa.
+- Nunca derruba o processo: falha de telemetria degrada em silêncio.
+- Dependências: OpenTelemetry + (opcional) o SDK Bedrock que a aplicação já usa.
 
-- **Não** muda a resposta do Bedrock — só observa.
-- **Nunca** derruba seu agente: se a telemetria falhar, ela degrada em silêncio.
-- Zero dependências internas. Só OpenTelemetry + o SDK Bedrock que você já usa.
-
----
-
-## O que você precisa fazer (4 passos)
-
-### 1. Instalar
+## Instalação
 
 ```bash
-npm install @a3data/pump-evolution @aws-sdk/client-bedrock-runtime
+npm install @topaz-ia/pump-evolution
+# agentes Bedrock também precisam do peer:
+npm install @aws-sdk/client-bedrock-runtime
 ```
 
-### 2. Criar o `manifest.yaml` do seu agente
+## Configuração
 
-O time do Control Tower te entrega esses valores no onboarding do agente.
+`manifest.yaml` (entregue no onboarding do CTA). `kind: agent` (padrão) exige
+`model`; `kind: mcp` não:
 
 ```yaml
 name: meu-agente
-model: anthropic.claude-3-5-haiku-20241022-v1:0
+kind: agent # ou: mcp
+model: anthropic.claude-3-5-haiku-20241022-v1:0 # não exigido para kind: mcp
 riskTier: T2-medium
 dataClassification: internal
-allowedTools: [] # liste as tools que o agente pode usar
+allowedTools: [] # tools que o agente/MCP pode usar
 runtime:
   telemetry:
-    otelEndpoint: https://<seu-cta>/v1/traces # OTLP do CTA
+    otelEndpoint: https://<cta>/api/telemetry/v1/traces
     serviceAccountId: svc-meu-agente # client_id do service account
 ```
 
-### 3. Definir as variáveis de ambiente (nunca no código)
+Variáveis de ambiente (nunca no código/manifesto):
 
-```bash
-export PUMP_EVOLUTION_ENABLED=true                              # liga a telemetria (padrão: desligada)
-export PUMP_SERVICE_ACCOUNT_CLIENT_SECRET=<client-secret>      # secret do service account
-export PUMP_SERVICE_ACCOUNT_TOKEN_URL=https://<seu-cognito>/oauth2/token
-```
+| Variável                             | Descrição                                      |
+| ------------------------------------ | ---------------------------------------------- |
+| `PUMP_EVOLUTION_ENABLED`             | `true` liga a telemetria (padrão: no-op total) |
+| `PUMP_SERVICE_ACCOUNT_CLIENT_SECRET` | secret do service account (client-credentials) |
+| `PUMP_SERVICE_ACCOUNT_TOKEN_URL`     | endpoint OAuth do Cognito (`.../oauth2/token`) |
 
-### 4. Embrulhar o cliente Bedrock e propagar o usuário
+O `client_id` vem de `runtime.telemetry.serviceAccountId` (ou passe explícito).
+
+> Duas identidades distintas:
+>
+> - **Service account** (`PUMP_SERVICE_ACCOUNT_*`): identidade da MÁQUINA do
+>   agente/MCP, usada só para autenticar o envio da telemetria. É **um por
+>   agente/MCP (por projeto)** — não use uma genérica para todos (perde atribuição,
+>   rotação e revogação isoladas). Não é por usuário humano.
+> - **Identidade do usuário** (quem chamou): vem do JWT do caller via
+>   `runWithIdentity` e preenche `enduser.id`/`cta.department` nos spans. É automática.
+
+## Agente (Bedrock)
 
 ```ts
-import { PumpEvolution } from '@a3data/pump-evolution';
+import { PumpEvolution, ConsumerTokenVerifier } from '@topaz-ia/pump-evolution';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 
-// Inicializa uma vez, no boot do agente.
 const pump = PumpEvolution.init({
   manifest: './manifest.yaml',
   serviceAccount: {
@@ -58,33 +68,62 @@ const pump = PumpEvolution.init({
     tokenUrl: process.env.PUMP_SERVICE_ACCOUNT_TOKEN_URL!,
   },
 });
-
-// Use este cliente no lugar do seu BedrockRuntimeClient normal.
 const bedrock = pump.instrumentBedrock(new BedrockRuntimeClient({ region: 'us-east-1' }));
+const auth = new ConsumerTokenVerifier({ issuer: process.env.CTA_AUTH_ISSUER! });
 
-// Em cada request, embrulhe a chamada com a identidade de quem está usando o agente.
-await pump.withUser({ userId: 'alice@acme.com', department: 'engineering' }, () =>
+// Por request: valida o JWT do caller, extrai a identidade e roda a invocação
+// já dentro do contexto de identidade (ver "Identidade").
+const r = await auth.runWithIdentity(req.headers.authorization, () =>
   bedrock.send(new ConverseCommand({ modelId, messages })),
 );
+if (!r.ok) return res.status(401).json({ error: 'Unauthorized', reason: r.reason });
 
-// No shutdown do processo, dê flush nos spans pendentes.
+// No shutdown do processo:
 await pump.shutdown();
 ```
 
-Pronto. Toda invocação Bedrock passa a ser observada pelo Control Tower AI.
+## MCP
 
----
+Um MCP não tem modelo — a unidade observável é a chamada de tool. Use `kind: mcp` no
+manifesto e auto-instrumente o servidor antes de registrar as tools:
 
-## Notas
+```ts
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-- **Ligado/desligado por ambiente:** sem `PUMP_EVOLUTION_ENABLED=true`, o SDK é no-op total
-  (zero overhead). Não precisa mexer no código para desligar.
-- **Sem identidade?** O span é marcado como `cta.identity.anonymous=true` — nunca inventa um usuário.
-- **Tools não-Bedrock:** embrulhe com `pump.traceTool('nome_da_tool', () => ...)` para observá-las.
-- **Privacidade:** findings de segurança/compliance registram só o rótulo da regra e a localização —
-  **nunca** o valor sensível em si (segredo/PII são redigidos).
+const server = pump.instrumentMcpServer(new McpServer({ name: 'meu-mcp', version: '1.0.0' }));
+server.registerTool('buscar_licitacao', { inputSchema }, async (args) => run(args));
+// cada tool registrada emite um span execute_tool governado
+
+// no handler HTTP do MCP:
+const r = await auth.runWithIdentity(req.headers.authorization, () =>
+  transport.handleRequest(req, res, body),
+);
+if (!r.ok) sendUnauthorized(res, r.reason);
+```
+
+Para tools avulsas (fora do registro), use `pump.traceMcpTool({ name, input }, fn)`.
+Uma tool fora do `allowedTools` gera finding de compliance (`TOOL_NOT_ALLOWED`); um
+input com segredo/PII gera finding de segurança. Observa, não bloqueia.
+
+## Identidade
+
+`ConsumerTokenVerifier.runWithIdentity(authorizationHeader, fn)` é a forma padrão
+(agente e MCP): valida o Bearer do Cognito (JWKS RS256 + issuer/audience/expiração,
+fail-closed), extrai a identidade dos claims e roda `fn` dentro do contexto — os
+spans saem com `enduser.id`/`cta.department` sem passar `user-id` na mão. Retorna
+`{ ok, user }` (você sabe quem é o usuário) e propaga o JWT em `user.token`.
+
+Primitiva de baixo nível: `pump.withUser({ userId, department }, fn)` — quando a
+identidade não vem de um JWT. Sem identidade, o span recebe `cta.identity.anonymous=true`
+(nunca inventa usuário).
+
+## Comportamento
+
+- Sem `PUMP_EVOLUTION_ENABLED=true`, o SDK é no-op total (zero overhead).
+- Falha de export degrada em silêncio (retry + circuit breaker por target); nunca lança.
+- Privacidade: findings registram só o rótulo da regra e a localização — nunca o valor.
 
 ## Requisitos
 
 - Node.js 20+
-- `@aws-sdk/client-bedrock-runtime` (peer dependency — o mesmo que seu agente já usa)
+- `@aws-sdk/client-bedrock-runtime` (peer, apenas para agentes Bedrock)

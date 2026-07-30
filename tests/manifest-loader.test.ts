@@ -32,6 +32,7 @@ describe('ManifestLoader — valid full manifest', () => {
       'service.name': 'latam-credit-analyzer',
       'gen_ai.agent.id': 'latam-credit-analyzer',
       'gen_ai.request.model': 'gpt-4o',
+      'cta.item_kind': 'agent',
       'cta.allowed_tools': ['search', 'calculator'],
       'cta.cost_center': 'LATAM-CC-001',
       'cta.squad': 'data-engineering',
@@ -91,6 +92,7 @@ describe('ManifestLoader — valid minimal manifest', () => {
       'service.name': 'minimal-agent',
       'gen_ai.agent.id': 'minimal-agent',
       'gen_ai.request.model': 'anthropic.claude-sonnet-4',
+      'cta.item_kind': 'agent',
       'cta.allowed_tools': ['search'],
     });
     // Assert keys are absent, not present-with-undefined.
@@ -184,5 +186,51 @@ describe('ManifestLoader — fail-fast (ADR-0031, zero fallback)', () => {
     expect(() => loadManifest({ modelId: 'm', allowedTools: ['t'] } as never)).toThrow(
       /No default is applied/,
     );
+  });
+});
+
+describe('ManifestLoader — MCP kind (the CTA maps MCPs too)', () => {
+  it('accepts a kind:mcp manifest WITHOUT modelId and omits gen_ai.request.model', () => {
+    const attrs = manifestToResourceAttributes(
+      loadManifest({ name: 'meu-mcp', kind: 'mcp', allowedTools: ['buscar'] } as never),
+    );
+
+    expect(attrs).toEqual({
+      'service.name': 'meu-mcp',
+      'gen_ai.agent.id': 'meu-mcp',
+      'cta.item_kind': 'mcp',
+      'cta.allowed_tools': ['buscar'],
+    });
+    expect(Object.prototype.hasOwnProperty.call(attrs, 'gen_ai.request.model')).toBe(false);
+  });
+
+  it('defaults kind to "agent" and emits cta.item_kind=agent when kind is omitted', () => {
+    const attrs = manifestToResourceAttributes(
+      loadManifest({ name: 'a', modelId: 'm', allowedTools: [] } as never),
+    );
+    expect(attrs['cta.item_kind']).toBe('agent');
+  });
+
+  it('still requires modelId for kind:agent (explicit)', () => {
+    expect(() => loadManifest({ name: 'a', kind: 'agent', allowedTools: ['t'] } as never)).toThrow(
+      /field "modelId" is required/,
+    );
+  });
+
+  it('keeps modelId on a kind:mcp manifest when it is provided (harmless)', () => {
+    const m = loadManifest({
+      name: 'mcp-x',
+      kind: 'mcp',
+      modelId: 'm',
+      allowedTools: ['t'],
+    } as never);
+    expect(m.modelId).toBe('m');
+    expect(m.kind).toBe('mcp');
+  });
+
+  it('throws on an invalid kind enum', () => {
+    expect(() =>
+      loadManifest({ name: 'a', kind: 'robot', modelId: 'm', allowedTools: ['t'] } as never),
+    ).toThrow(/kind.*must be one of/s);
   });
 });

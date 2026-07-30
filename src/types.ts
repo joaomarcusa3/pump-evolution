@@ -1,5 +1,5 @@
 /**
- * Shared contract types for the `@a3data/pump-evolution` SDK.
+ * Shared contract types for the `@topaz-ia/pump-evolution` SDK.
  *
  * These types are intentionally standalone: the SDK is installed by external
  * agent developers and MUST NOT depend on any internal `cta-*` package. Where a
@@ -20,6 +20,18 @@ export type DataClassification = 'public' | 'internal' | 'sensitive';
  * Risk tiers the SDK understands. Mirrors the CTA `RiskTier` value strings.
  */
 export type RiskTier = 'T1-low' | 'T2-medium' | 'T3-sensitive' | 'T4-autonomous';
+
+/**
+ * Kind of item the manifest describes:
+ *  - `agent` — an LLM-backed agent (has a `modelId`). Default when omitted.
+ *  - `mcp`   — a Model Context Protocol server: a governed tool provider with no
+ *              model of its own. `modelId` is not required for this kind.
+ *
+ * The CTA quer mapear MCPs no mesmo pipeline de observabilidade que os agentes,
+ * então o SDK trata os dois — a unidade observável de um MCP são as chamadas de
+ * tool (`traceMcpTool`), não invocações de modelo.
+ */
+export type ItemKind = 'agent' | 'mcp';
 
 /**
  * Owner block of the manifest. `email` is the auditable principal; `team` and
@@ -62,8 +74,16 @@ export interface ManifestRuntime {
 export interface AgentManifest {
   /** Unique short identifier of the agent within the tenant. */
   readonly name: string;
-  /** Model identifier (e.g. `anthropic.claude-sonnet-4`). */
-  readonly modelId: string;
+  /**
+   * Item kind. `agent` (default when omitted) or `mcp`. Governs whether
+   * `modelId` is required (agents) or not (MCP servers).
+   */
+  readonly kind?: ItemKind;
+  /**
+   * Model identifier (e.g. `anthropic.claude-sonnet-4`). REQUIRED for
+   * `kind: agent`; not applicable to `kind: mcp` (an MCP server has no model).
+   */
+  readonly modelId?: string;
   /** Allowlist of tool names the agent may use. */
   readonly allowedTools: readonly string[];
   /** Risk tier. */
@@ -143,7 +163,14 @@ export interface PumpConfig {
 export interface ResourceAttributes {
   readonly 'service.name': string;
   readonly 'gen_ai.agent.id': string;
-  readonly 'gen_ai.request.model': string;
+  /** Present for agents; omitted for `kind: mcp` (no model). */
+  readonly 'gen_ai.request.model'?: string;
+  /**
+   * `agent` | `mcp`. Always set by {@link manifestToResourceAttributes} so the
+   * receiver can dimension the source; optional in the type only so existing
+   * hand-built `ResourceAttributes` literals stay valid.
+   */
+  readonly 'cta.item_kind'?: ItemKind;
   readonly 'cta.cost_center'?: string;
   readonly 'cta.squad'?: string;
   readonly 'cta.data_classification'?: DataClassification;
@@ -291,6 +318,18 @@ export interface UserContext {
 }
 
 /**
+ * A single MCP tool invocation to be traced as a governed `execute_tool` span.
+ * `input`, when provided, is scanned LOCALLY for OWASP LLM signals and only
+ * REDACTED findings are emitted — the raw input is never sent as telemetry.
+ */
+export interface McpToolInvocation {
+  /** MCP tool name (`gen_ai.tool.name`). */
+  readonly name: string;
+  /** Optional serialized tool input/arguments, scanned locally (redacted). */
+  readonly input?: string;
+}
+
+/**
  * Controllable handle returned by `PumpEvolution.init`. The concrete
  * implementation is provided by the `init` composition; this is the public
  * contract external developers program against.
@@ -311,6 +350,24 @@ export interface PumpHandle {
    * Requirement 5.2). When the SDK is disabled, runs `fn` untraced.
    */
   traceTool<T>(name: string, fn: () => T): T;
+  /**
+   * Wraps a **governed MCP tool call** in an `execute_tool` span with the SAME
+   * compliance (allowedTools) + OWASP-LLM security checks agents get. Use this
+   * from an MCP server's tool handler (or an MCP client's `callTool`) so the CTA
+   * maps MCP servers in the same observability pipeline as agents. When the SDK
+   * is disabled, runs `fn` untraced.
+   */
+  traceMcpTool<T>(invocation: McpToolInvocation, fn: () => T): T;
+  /**
+   * Auto-instruments an MCP server (`@modelcontextprotocol/sdk`) in place so
+   * every tool it registers is governed automatically — no per-handler
+   * `traceMcpTool` wrapping. Returns the same server. Call it right after
+   * constructing the server and BEFORE registering tools. When the SDK is
+   * disabled, returns the server untouched.
+   *
+   * Typed structurally (`S`) to avoid a hard dependency on the MCP SDK types.
+   */
+  instrumentMcpServer<S>(server: S): S;
   /** Run `fn` with the given user identity propagated to all spans in the flow. */
   withUser<T>(ctx: UserContext, fn: () => T): T;
   /** Flush pending spans and tear down the telemetry pipeline. */

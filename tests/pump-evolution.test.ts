@@ -147,6 +147,9 @@ describe('PumpEvolution.init — disabled (no-op)', () => {
     expect(returned).toBe(raw);
 
     expect(handle.traceTool('x', () => 7)).toBe(7);
+    expect(handle.traceMcpTool({ name: 'x' }, () => 7)).toBe(7);
+    const mcpSrv = { registerTool: () => undefined };
+    expect(handle.instrumentMcpServer(mcpSrv)).toBe(mcpSrv);
     expect(handle.withUser({ userId: 'a' }, () => 'ran')).toBe('ran');
     await expect(handle.shutdown()).resolves.toBeUndefined();
   });

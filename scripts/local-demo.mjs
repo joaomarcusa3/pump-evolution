@@ -1,5 +1,5 @@
 /**
- * Local end-to-end demo of the @a3data/pump-evolution SDK — NO AWS required.
+ * Local end-to-end demo of the @topaz-ia/pump-evolution SDK — NO AWS required.
  *
  * Spins up a throwaway HTTP server that plays BOTH roles the SDK talks to:
  *   • the OAuth token endpoint  (POST /oauth2/token → client-credentials token)
@@ -12,7 +12,7 @@
  * you can see identity + token usage + tool + compliance attributes flowing.
  *
  * Run:  node packages/pump-evolution/scripts/local-demo.mjs
- * (build first: pnpm --filter @a3data/pump-evolution build)
+ * (build first: pnpm --filter @topaz-ia/pump-evolution build)
  */
 
 import http from 'node:http';

@@ -1,7 +1,19 @@
 {
-  "name": "@a3data/pump-evolution",
+  "name": "@topaz-ia/pump-evolution",
   "version": "0.0.1",
-  "description": "Plug-and-play TypeScript/Node telemetry SDK for AI agents — emits governed usage telemetry (identity, tokens, cost, tools, compliance) to Control Tower AI as OpenTelemetry GenAI spans. Zero internal cta-* dependencies.",
+  "description": "Plug-and-play TypeScript/Node telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Zero internal cta-* dependencies.",
+  "keywords": [
+    "telemetry",
+    "observability",
+    "opentelemetry",
+    "otel",
+    "genai",
+    "llm",
+    "mcp",
+    "bedrock",
+    "governance",
+    "control-tower"
+  ],
   "author": "A3Data",
   "license": "UNLICENSED",
   "repository": {
@@ -16,28 +28,37 @@
     "node": ">=20.11.0"
   },
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsup",
-    "prepare": "tsup",
-    "clean": "rimraf dist .turbo *.tsbuildinfo",
+    "clean": "rimraf dist .turbo *.tsbuildinfo docs",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "docs": "typedoc",
+    "api:extract": "pnpm run build && api-extractor run --local",
+    "api:check": "pnpm run build && api-extractor run",
     "demo:local": "pnpm run build && node scripts/local-demo.mjs"
   },
   "dependencies": {
@@ -60,12 +81,14 @@
   "devDependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.750.0",
     "@eslint/js": "^9.39.4",
+    "@microsoft/api-extractor": "^7.52.0",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
     "aws-sdk-client-mock": "^4.1.0",
     "eslint": "^9.15.0",
     "rimraf": "^6.0.1",
     "tsup": "^8.5.0",
+    "typedoc": "^0.28.0",
     "typescript": "^5.6.3",
     "vitest": "^3.2.6"
   }

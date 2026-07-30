@@ -35,7 +35,7 @@ import {
 import type { ResourceAttributes } from './types.js';
 
 /** Default tracer name used when a caller does not supply one. */
-export const TRACER_NAME = '@a3data/pump-evolution' as const;
+export const TRACER_NAME = '@topaz-ia/pump-evolution' as const;
 
 /** Default tracer version reported to OpenTelemetry. */
 export const TRACER_VERSION = '0.0.1' as const;

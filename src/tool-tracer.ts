@@ -183,8 +183,13 @@ export function traceTool<T>(tracer: Tracer, name: string, fn: () => T): T {
   return runWithSpan(span, fn);
 }
 
-/** Runs `fn`, ending `span` on completion; handles sync and async `fn`. */
-function runWithSpan<T>(span: Span, fn: () => T): T {
+/**
+ * Runs `fn`, ending `span` on completion; handles sync and async `fn`.
+ *
+ * Exported so other governed tracers (e.g. the MCP tool tracer) reuse the exact
+ * same span lifetime + error semantics instead of duplicating them.
+ */
+export function runWithSpan<T>(span: Span, fn: () => T): T {
   try {
     const result = fn();
     if (isPromise(result)) {

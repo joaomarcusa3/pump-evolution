@@ -281,3 +281,25 @@ export function applyIdentityToSpan(
   if (department !== undefined) span.setAttribute(CTA_DEPARTMENT, department);
   if (costCenter !== undefined) span.setAttribute(CTA_COST_CENTER, costCenter);
 }
+
+/**
+ * Mapeia claims verificados do IdP (Cognito) para um {@link UserContext}, para
+ * alimentar `withUser`. Fecha o laço do consumer-auth: valida o Bearer de quem
+ * chama e propaga a identidade dele para os spans governados. Precedência entre
+ * fontes reais de claim (não é fallback fabricado); claims ausentes são omitidos.
+ */
+export function claimsToUserContext(claims: Record<string, unknown>): UserContext {
+  const userId =
+    readString(claims.email) ??
+    readString(claims['cognito:username']) ??
+    readString(claims.username) ??
+    readString(claims.sub);
+  const department = readString(claims['custom:department']);
+  const costCenter =
+    readString(claims['custom:costCenter']) ?? readString(claims['custom:cost_center']);
+  return {
+    ...(userId !== undefined ? { userId } : {}),
+    ...(department !== undefined ? { department } : {}),
+    ...(costCenter !== undefined ? { costCenter } : {}),
+  };
+}

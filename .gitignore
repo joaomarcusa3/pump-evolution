@@ -5,6 +5,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# API docs (typedoc output — gerado; o report etc/*.api.md É commitado)
+docs/
+
 # Test / coverage
 coverage/
 
@@ -20,3 +23,6 @@ coverage/
 
 # OS
 .DS_Store
+
+# api-extractor scratch
+temp/

@@ -36,6 +36,13 @@ export const CTA_COMPLIANCE_STATUS = 'cta.compliance.status' as const;
 export const CTA_COMPLIANCE_FINDINGS = 'cta.compliance.findings' as const;
 export const CTA_IDENTITY_ANONYMOUS = 'cta.identity.anonymous' as const;
 
+/**
+ * Item kind the telemetry describes: `agent` (LLM-backed) or `mcp` (Model
+ * Context Protocol server — a governed tool provider, no model of its own).
+ * Lets the CTA receiver dimension agents vs MCP servers in the same pipeline.
+ */
+export const CTA_ITEM_KIND = 'cta.item_kind' as const;
+
 // ─── CTA security attributes (OWASP LLM Top 10 — runtime) ─────────────────────
 
 /** `secure` | `at_risk` — the invocation's runtime security posture. */
