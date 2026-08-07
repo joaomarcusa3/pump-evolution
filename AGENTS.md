@@ -1,4 +1,4 @@
-# AGENTS.md — `@a3data/pump-evolution`
+# AGENTS.md — `@topaz-ia/pump-evolution`
 
 Guia para agentes de IA (e humanos) que **modificam** este pacote. É uma
 biblioteca instalável por terceiros — trate-a como produto público.
