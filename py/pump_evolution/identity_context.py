@@ -131,6 +131,15 @@ def _decode_security_context(raw: str) -> Optional[Dict[str, Any]]:
 # ─── Extração de claim ─────────────────────────────────────────────────────────
 
 
+def _resolve_directorate_as_department(source: Dict[str, Any]) -> Optional[str]:
+    """Fallback pro claim `custom:topaz_directorate` (alias `custom:cta_directorate`)
+    como `department` quando `custom:department` em si está ausente. Usado em
+    `_extract_identity` e `claims_to_user_context`."""
+    return _read_string(source.get("custom:topaz_directorate")) or _read_string(
+        source.get("custom:cta_directorate")
+    )
+
+
 def _extract_identity(claims: Dict[str, Any]) -> UserContext:
     """Extrai `{user_id, department, cost_center}` de um dict de claims, casando
     os nomes reais do CTA/Cognito. Entende tanto o `SecurityContext` embrulhado
@@ -145,7 +154,11 @@ def _extract_identity(claims: Dict[str, Any]) -> UserContext:
         or _read_string(claims.get("email"))
         or _read_string(claims.get("sub"))
     )
-    department = _read_string(sc.get("department")) or _read_string(sc.get("custom:department"))
+    department = (
+        _read_string(sc.get("department"))
+        or _read_string(sc.get("custom:department"))
+        or _resolve_directorate_as_department(sc)
+    )
     cost_center = (
         _read_string(sc.get("costCenter"))
         or _read_string(sc.get("custom:cost_center"))
@@ -257,7 +270,9 @@ def claims_to_user_context(claims: Dict[str, Any]) -> UserContext:
         or _read_string(claims.get("username"))
         or _read_string(claims.get("sub"))
     )
-    department = _read_string(claims.get("custom:department"))
+    department = _read_string(claims.get("custom:department")) or _resolve_directorate_as_department(
+        claims
+    )
     cost_center = _read_string(claims.get("custom:costCenter")) or _read_string(
         claims.get("custom:cost_center")
     )
