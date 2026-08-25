@@ -19,10 +19,15 @@
  *  - JWKS em cache com TTL; `kid` desconhecido dispara UM refetch (chave rotacionada).
  */
 
-import { createPublicKey, verify as cryptoVerify, type KeyObject } from 'node:crypto';
+import {
+  createPublicKey,
+  verify as cryptoVerify,
+  type JsonWebKey,
+  type KeyObject,
+} from "node:crypto";
 
-import { claimsToUserContext, withUser } from './identity-context.js';
-import type { UserContext } from './types.js';
+import { claimsToUserContext, withUser } from "./identity-context.js";
+import type { UserContext } from "./types.js";
 
 // ─── Config & tipos ─────────────────────────────────────────────────────────
 
@@ -69,16 +74,18 @@ interface Jwk {
 // ─── Narrowing helpers ──────────────────────────────────────────────────────
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function readString(v: unknown): string | undefined {
-  return typeof v === 'string' && v.length > 0 ? v : undefined;
+  return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
 function decodeSegment(seg: string): Record<string, unknown> | undefined {
   try {
-    const parsed: unknown = JSON.parse(Buffer.from(seg, 'base64url').toString('utf8'));
+    const parsed: unknown = JSON.parse(
+      Buffer.from(seg, "base64url").toString("utf8"),
+    );
     return isRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
@@ -94,9 +101,16 @@ function parseJwks(payload: unknown): Jwk[] {
     const kty = readString(k.kty);
     const n = readString(k.n);
     const e = readString(k.e);
-    if (kid !== undefined && kty === 'RSA' && n !== undefined && e !== undefined) {
+    if (
+      kid !== undefined &&
+      kty === "RSA" &&
+      n !== undefined &&
+      e !== undefined
+    ) {
       const alg = readString(k.alg);
-      keys.push(alg !== undefined ? { kid, kty, n, e, alg } : { kid, kty, n, e });
+      keys.push(
+        alg !== undefined ? { kid, kty, n, e, alg } : { kid, kty, n, e },
+      );
     }
   }
   return keys;
@@ -114,18 +128,25 @@ export class ConsumerTokenVerifier {
   private readonly fetchImpl: JwksFetchLike;
   private readonly now: () => number;
 
-  private cache: { keys: Map<string, KeyObject>; fetchedAt: number } | undefined;
+  private cache:
+    | { keys: Map<string, KeyObject>; fetchedAt: number }
+    | undefined;
   private inFlight: Promise<Map<string, KeyObject>> | undefined;
 
   constructor(config: ConsumerAuthConfig) {
     this.issuer = config.issuer;
-    this.jwksUri = config.jwksUri ?? `${config.issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
+    this.jwksUri =
+      config.jwksUri ??
+      `${config.issuer.replace(/\/$/, "")}/.well-known/jwks.json`;
     this.audience = config.audience;
     this.clockToleranceSec = config.clockToleranceSec ?? 60;
     this.jwksCacheTtlMs = config.jwksCacheTtlMs ?? 600_000;
-    const resolvedFetch = config.fetchImpl ?? (globalThis.fetch as JwksFetchLike | undefined);
+    const resolvedFetch =
+      config.fetchImpl ?? (globalThis.fetch as JwksFetchLike | undefined);
     if (resolvedFetch === undefined) {
-      throw new Error('[pump-evolution] consumer-auth: no `fetch` available (provide fetchImpl).');
+      throw new Error(
+        "[pump-evolution] consumer-auth: no `fetch` available (provide fetchImpl).",
+      );
     }
     this.fetchImpl = resolvedFetch;
     this.now = config.now ?? Date.now;
@@ -136,23 +157,24 @@ export class ConsumerTokenVerifier {
    * cru. Retorna os claims validados em caso de sucesso; fail-closed caso contrário.
    */
   async verify(authorizationOrToken: string): Promise<ConsumerAuthResult> {
-    const token = authorizationOrToken.replace(/^Bearer\s+/i, '').trim();
-    const parts = token.split('.');
-    if (parts.length !== 3) return { ok: false, reason: 'malformed token' };
+    const token = authorizationOrToken.replace(/^Bearer\s+/i, "").trim();
+    const parts = token.split(".");
+    if (parts.length !== 3) return { ok: false, reason: "malformed token" };
 
     const header = decodeSegment(parts[0]!);
     const payload = decodeSegment(parts[1]!);
     if (header === undefined || payload === undefined)
-      return { ok: false, reason: 'malformed token' };
-    if (header.alg !== 'RS256')
+      return { ok: false, reason: "malformed token" };
+    if (header.alg !== "RS256")
       return { ok: false, reason: `unsupported alg: ${String(header.alg)}` };
     const kid = readString(header.kid);
-    if (kid === undefined) return { ok: false, reason: 'missing kid' };
+    if (kid === undefined) return { ok: false, reason: "missing kid" };
 
     const key = await this.resolveKey(kid);
-    if (key === undefined) return { ok: false, reason: 'unknown signing key' };
+    if (key === undefined) return { ok: false, reason: "unknown signing key" };
 
-    if (!this.verifySignature(parts, key)) return { ok: false, reason: 'invalid signature' };
+    if (!this.verifySignature(parts, key))
+      return { ok: false, reason: "invalid signature" };
 
     const claimError = this.validateClaims(payload);
     if (claimError !== undefined) return { ok: false, reason: claimError };
@@ -177,13 +199,19 @@ export class ConsumerTokenVerifier {
   async runWithIdentity<T>(
     authorizationOrToken: string | undefined,
     fn: (user: UserContext) => T | Promise<T>,
-  ): Promise<{ ok: true; user: UserContext; value: Awaited<T> } | { ok: false; reason: string }> {
-    const header = authorizationOrToken ?? '';
+  ): Promise<
+    | { ok: true; user: UserContext; value: Awaited<T> }
+    | { ok: false; reason: string }
+  > {
+    const header = authorizationOrToken ?? "";
     const result = await this.verify(header);
     if (!result.ok) return result;
 
-    const bareToken = header.replace(/^Bearer\s+/i, '').trim();
-    const user: UserContext = { ...claimsToUserContext(result.claims), token: bareToken };
+    const bareToken = header.replace(/^Bearer\s+/i, "").trim();
+    const user: UserContext = {
+      ...claimsToUserContext(result.claims),
+      token: bareToken,
+    };
     const value = (await withUser(user, () => fn(user))) as Awaited<T>;
     return { ok: true, user, value };
   }
@@ -191,10 +219,10 @@ export class ConsumerTokenVerifier {
   private verifySignature(parts: string[], key: KeyObject): boolean {
     try {
       return cryptoVerify(
-        'RSA-SHA256',
+        "RSA-SHA256",
         Buffer.from(`${parts[0]}.${parts[1]}`),
         key,
-        Buffer.from(parts[2]!, 'base64url'),
+        Buffer.from(parts[2]!, "base64url"),
       );
     } catch {
       return false;
@@ -205,22 +233,24 @@ export class ConsumerTokenVerifier {
     const nowSec = Math.floor(this.now() / 1000);
     const tol = this.clockToleranceSec;
 
-    if (readString(payload.iss) !== this.issuer) return 'issuer mismatch';
+    if (readString(payload.iss) !== this.issuer) return "issuer mismatch";
 
-    const exp = typeof payload.exp === 'number' ? payload.exp : undefined;
-    if (exp === undefined) return 'missing exp';
-    if (nowSec > exp + tol) return 'token expired';
+    const exp = typeof payload.exp === "number" ? payload.exp : undefined;
+    if (exp === undefined) return "missing exp";
+    if (nowSec > exp + tol) return "token expired";
 
-    if (typeof payload.nbf === 'number' && nowSec < payload.nbf - tol) return 'token not yet valid';
+    if (typeof payload.nbf === "number" && nowSec < payload.nbf - tol)
+      return "token not yet valid";
 
-    if (this.audience !== undefined && !this.audienceMatches(payload)) return 'audience mismatch';
+    if (this.audience !== undefined && !this.audienceMatches(payload))
+      return "audience mismatch";
 
     return undefined;
   }
 
   private audienceMatches(payload: Record<string, unknown>): boolean {
     const aud = payload.aud;
-    if (typeof aud === 'string' && aud === this.audience) return true;
+    if (typeof aud === "string" && aud === this.audience) return true;
     if (Array.isArray(aud) && aud.includes(this.audience)) return true;
     // Cognito access tokens carry `client_id` instead of `aud`.
     return readString(payload.client_id) === this.audience;
@@ -228,7 +258,8 @@ export class ConsumerTokenVerifier {
 
   private async resolveKey(kid: string): Promise<KeyObject | undefined> {
     const fresh =
-      this.cache !== undefined && this.now() - this.cache.fetchedAt < this.jwksCacheTtlMs;
+      this.cache !== undefined &&
+      this.now() - this.cache.fetchedAt < this.jwksCacheTtlMs;
     if (fresh && this.cache!.keys.has(kid)) return this.cache!.keys.get(kid);
 
     // Unknown kid or stale cache → refetch once (handles key rotation).
@@ -248,14 +279,20 @@ export class ConsumerTokenVerifier {
   private async fetchJwks(): Promise<Map<string, KeyObject>> {
     const keys = new Map<string, KeyObject>();
     try {
-      const res = await this.fetchImpl(this.jwksUri, { method: 'GET' });
+      const res = await this.fetchImpl(this.jwksUri, { method: "GET" });
       if (!res.ok) {
         this.cache = { keys, fetchedAt: this.now() };
         return keys;
       }
       for (const jwk of parseJwks(await res.json())) {
         try {
-          keys.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' }));
+          keys.set(
+            jwk.kid,
+            createPublicKey({
+              key: jwk as unknown as JsonWebKey,
+              format: "jwk",
+            }),
+          );
         } catch {
           // Skip an unparseable JWK rather than failing the whole set.
         }

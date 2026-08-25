@@ -120,6 +120,10 @@ export function init(config: PumpConfig, internals: PumpInitInternals = {}): Pum
   const resolved = resolveTelemetryConfig(config, manifest);
   const resourceAttributes = manifestToResourceAttributes(manifest);
 
+  // Diagnostic logger: public `config.logger` (external devs) with the internal
+  // test seam taking precedence. When absent, the exporter degrades silently.
+  const exporterLogger = internals.logger ?? config.logger;
+
   const spanProcessors = internals.spanProcessors ?? [
     createOtlpBatchProcessor({
       endpoint: resolved.endpoint,
@@ -128,7 +132,7 @@ export function init(config: PumpConfig, internals: PumpInitInternals = {}): Pum
         clientId: resolved.serviceAccount.clientId,
         clientSecret: resolved.serviceAccount.clientSecret,
       }),
-      ...(internals.logger !== undefined ? { logger: internals.logger } : {}),
+      ...(exporterLogger !== undefined ? { logger: exporterLogger } : {}),
     }),
   ];
 

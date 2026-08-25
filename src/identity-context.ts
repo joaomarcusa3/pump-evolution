@@ -34,9 +34,17 @@
  *  raw JSON.
  *
  * Grounding — Bearer JWT (Cognito user token) claim names (verified in
- * `packages/cta-api/src/middleware/auth.ts` and `packages/cta-mcp-server/src/auth.ts`):
+ * `packages/cta-api/src/middleware/auth.ts` and
+ * `packages/cta-factory-mcp/src/server.ts`):
  *  - `enduser.id`  ← `email`, else `sub` (email preferred; both are real claims).
- *  - department    ← `custom:department`.
+ *  - department    ← `custom:department`, else `custom:topaz_directorate`
+ *    (alias `custom:cta_directorate`) used as-is. NOTE: on the real platform
+ *    `department` and `directorate` are distinct fields (`SecurityContext` has
+ *    no `directorate` at all — see `packages/cta-core/src/shared/security-context.ts`);
+ *    the SDK's `UserContext` has no separate slot for it, so the directorate is
+ *    used as the best-available `department` value only when `custom:department`
+ *    itself is absent. There is no `custom:topaz_area` claim anywhere in the
+ *    platform — do not reintroduce it.
  *  - cost center   ← `custom:cost_center`, else `custom:cta_cost_center` (both
  *    are real aliases used by the Cognito schema in this deployment).
  */
@@ -135,6 +143,17 @@ function decodeSecurityContext(raw: string): Record<string, unknown> | undefined
 // ─── Claim extraction ─────────────────────────────────────────────────────────
 
 /**
+ * Falls back to the `custom:topaz_directorate` claim (alias `custom:cta_directorate`)
+ * as `department` when `custom:department` itself is absent. Used in both
+ * {@link extractIdentity} and {@link claimsToUserContext}.
+ */
+function resolveDirectorateAsDepartment(source: Record<string, unknown>): string | undefined {
+  return (
+    readString(source['custom:topaz_directorate']) ?? readString(source['custom:cta_directorate'])
+  );
+}
+
+/**
  * Extracts `{ userId, department, costCenter }` from a claims record, matching
  * the real CTA/Cognito claim names. Understands both the wrapped
  * `SecurityContext` shape (claims under `sc`, using `principalId`/`email`) and a
@@ -152,7 +171,10 @@ function extractIdentity(claims: Record<string, unknown>): UserContext {
     readString(claims.email) ??
     readString(claims.sub);
 
-  const department = readString(sc.department) ?? readString(sc['custom:department']);
+  const department =
+    readString(sc.department) ??
+    readString(sc['custom:department']) ??
+    resolveDirectorateAsDepartment(sc);
 
   const costCenter =
     readString(sc.costCenter) ??
@@ -294,7 +316,8 @@ export function claimsToUserContext(claims: Record<string, unknown>): UserContex
     readString(claims['cognito:username']) ??
     readString(claims.username) ??
     readString(claims.sub);
-  const department = readString(claims['custom:department']);
+  const department =
+    readString(claims['custom:department']) ?? resolveDirectorateAsDepartment(claims);
   const costCenter =
     readString(claims['custom:costCenter']) ?? readString(claims['custom:cost_center']);
   return {
