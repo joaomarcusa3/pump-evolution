@@ -7,6 +7,18 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-08-19
+
+### Fixed
+
+- **Fallback de `department`**: quando `custom:department` está ausente, cai para
+  o claim real `custom:topaz_directorate` (alias `custom:cta_directorate`),
+  usado como valor direto — sem inventar campos (`custom:topaz_area` não existe
+  na plataforma). Aplica-se a `extractIdentity` (headers) e `claimsToUserContext`
+  (consumer-auth), em TS e Python.
+
+## [0.0.1]
+
 ### Added
 
 - **Suporte a MCP servers** (`kind: mcp`): `modelId` condicional e atributo
