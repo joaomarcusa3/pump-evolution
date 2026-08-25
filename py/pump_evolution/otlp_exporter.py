@@ -20,6 +20,7 @@ das exportações.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -97,6 +98,75 @@ def _describe_export_error(error: BaseException) -> Dict[str, Any]:
     if isinstance(data, str) and data:
         meta["detail"] = data[:300]
     return meta
+
+
+def _relatar_veredito(corpo: bytes, log: Any) -> None:
+    """Reporta o que o receiver do CTA fez com o lote.
+
+    O receiver responde 202 mesmo quando DESCARTA os spans: o corpo traz
+    `{"accepted": N, "rejected": M}`. Sem olhar esse corpo, um lote inteiro
+    descartado por falta de `gen_ai.operation.name = "chat"` passa como sucesso
+    — o modo de falha mais caro de diagnosticar, porque tudo aparenta funcionar
+    e nada chega ao portal.
+
+    Só fala quando ha algo errado: lote aceito e silencio, como antes.
+    """
+    try:
+        dados = json.loads(corpo.decode("utf-8", "replace"))
+    except Exception:
+        return
+    if not isinstance(dados, dict):
+        return
+    aceitos = dados.get("accepted")
+    rejeitados = dados.get("rejected")
+    if not isinstance(aceitos, int) and not isinstance(rejeitados, int):
+        return
+
+    if isinstance(rejeitados, int) and rejeitados > 0:
+        log(
+            "warn",
+            "telemetry accepted by the receiver but spans were REJECTED — "
+            "check gen_ai.operation.name = 'chat' on manually built spans",
+            {"accepted": aceitos, "rejected": rejeitados},
+        )
+    elif aceitos == 0:
+        log(
+            "warn",
+            "telemetry accepted by the receiver but NOTHING was recorded "
+            "(accepted: 0) — the batch was silently discarded",
+            {"accepted": aceitos, "rejected": rejeitados},
+        )
+    else:
+        log("debug", "telemetry recorded by the receiver", {"accepted": aceitos})
+
+
+def _instrumentar_resposta(delegate: SpanExporter, log: Any) -> None:
+    """Enxerta a leitura do corpo da resposta no delegate OTLP.
+
+    O exporter OTLP so devolve SUCCESS/FAILURE — o corpo se perde. Aqui a
+    sessao HTTP dele e envolvida para que a resposta seja lida no caminho.
+    Best-effort de proposito: se o delegate nao expuser sessao (delegate
+    injetado em teste, outra implementacao), nada acontece.
+    """
+    sessao = getattr(delegate, "_session", None)
+    post = getattr(sessao, "post", None)
+    if sessao is None or not callable(post) or getattr(sessao, "_pump_hook", False):
+        return
+
+    def post_observado(*args: Any, **kwargs: Any) -> Any:
+        resposta = post(*args, **kwargs)
+        try:
+            if 200 <= int(getattr(resposta, "status_code", 0)) < 300:
+                _relatar_veredito(getattr(resposta, "content", b"") or b"", log)
+        except Exception:
+            pass
+        return resposta
+
+    try:
+        sessao.post = post_observado  # type: ignore[method-assign]
+        sessao._pump_hook = True  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 class ResilientAuthSpanExporter(SpanExporter):
@@ -195,6 +265,7 @@ class ResilientAuthSpanExporter(SpanExporter):
             return self._delegate
         previous = self._delegate
         self._delegate = self._create_delegate({"Authorization": f"Bearer {token}"})
+        _instrumentar_resposta(self._delegate, self._log)
         self._delegate_token = token
         if previous is not None:
             try:

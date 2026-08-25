@@ -18,5 +18,5 @@ allowedTools: []
 
 runtime:
   telemetry:
-    otelEndpoint: https://d3eaaghzw7ojx8.cloudfront.net/api/telemetry/v1/traces
+    otelEndpoint: <otelEndpoint — pegue na aba SDK & Telemetria do componente>
     serviceAccountId: <CLIENT_ID_DO_SERVICE_ACCOUNT>

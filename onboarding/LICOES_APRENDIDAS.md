@@ -77,7 +77,7 @@ reproduzível sem intervenção manual:
 Se a EC2 não tem rota pra internet ou pro CloudFront do CTA,
 o export falha silenciosamente. Verificar conectividade:
 ```bash
-curl -X POST https://d3eaaghzw7ojx8.cloudfront.net/api/telemetry/v1/traces \
+curl -X POST <otelEndpoint — pegue na aba SDK & Telemetria do componente> \
   -H "Content-Type: application/json" -d '{}'
 # Deve retornar 401 (auth missing) — significa que alcançou
 ```

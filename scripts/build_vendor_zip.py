@@ -163,9 +163,20 @@ def preparar(versao: str, tgz: Path) -> None:
     destino_py = PREPARO / "python" / "src"
     destino_py.mkdir(parents=True)
     copiar(RAIZ / "py" / "pyproject.toml", destino_py / "pyproject.toml")
-    (destino_py / "pump_evolution").mkdir()
-    for modulo in sorted((RAIZ / "py" / "pump_evolution").glob("*.py")):
-        copiar(modulo, destino_py / "pump_evolution" / modulo.name)
+    # rglob, nao glob: o pacote tem subpacotes (integrations/), e um glob de
+    # primeiro nivel os deixaria de fora -- o modulo existiria no git e nao no
+    # zip, e quem seguisse a documentacao levaria ModuleNotFoundError.
+    origem_py = RAIZ / "py" / "pump_evolution"
+    modulos = sorted(
+        m for m in origem_py.rglob("*.py") if "__pycache__" not in m.parts
+    )
+    if not modulos:
+        erro("py/pump_evolution nao tem modulo nenhum — pacote Python vazio")
+    for modulo in modulos:
+        alvo = destino_py / "pump_evolution" / modulo.relative_to(origem_py)
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        copiar(modulo, alvo)
+    print(f"  python: {len(modulos)} modulos")
     print(f"  preparo montado em {PREPARO.relative_to(RAIZ)} (versao {versao})")
 
 
