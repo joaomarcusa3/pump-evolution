@@ -71,6 +71,34 @@ def _run_async(coro: "asyncio.Future") -> Any:
     return asyncio.run(coro)
 
 
+def _describe_export_error(error: BaseException) -> Dict[str, Any]:
+    """Descrição estruturada e privacy-safe de uma falha de export (paridade com
+    `describeExportError` do TS). Extrai status HTTP (`code`/`status`/
+    `response.status_code`) e um corpo curto quando o erro os carrega, mais um
+    hint acionável pros casos comuns de auth — pra um 401/403 deixar de ser um
+    batch dropado invisível. Nunca inclui segredo/token."""
+    meta: Dict[str, Any] = {"error": str(error)}
+    status = getattr(error, "code", None)
+    if not isinstance(status, int):
+        status = getattr(error, "status", None)
+    if not isinstance(status, int):
+        response = getattr(error, "response", None)
+        status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        meta["status"] = status
+        if status == 401:
+            meta["hint"] = (
+                "auth: token inválido/expirado — verifique clientId+secret do service "
+                "account (rotação invalida a credencial anterior)"
+            )
+        elif status == 403:
+            meta["hint"] = "auth: token sem o scope telemetry:write"
+    data = getattr(error, "data", None)
+    if isinstance(data, str) and data:
+        meta["detail"] = data[:300]
+    return meta
+
+
 class ResilientAuthSpanExporter(SpanExporter):
     """Um `SpanExporter` que autentica, re-tenta, aciona um circuit breaker e
     degrada em silêncio. Embrulhe num `BatchSpanProcessor` (ver
@@ -113,7 +141,7 @@ class ResilientAuthSpanExporter(SpanExporter):
             self._log(
                 "warn",
                 "telemetry export failed — dropping batch (agent unaffected)",
-                {"endpoint": self._endpoint, "error": str(error)},
+                {"endpoint": self._endpoint, **_describe_export_error(error)},
             )
             return SpanExportResult.FAILURE
 

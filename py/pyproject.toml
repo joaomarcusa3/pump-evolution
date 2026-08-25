@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pump-evolution"
-version = "0.0.1"
+version = "0.0.2"
 description = "Plug-and-play Python telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Python parity of @topaz-ia/pump-evolution. Zero internal cta-* dependencies."
 readme = "README.md"
 requires-python = ">=3.9"

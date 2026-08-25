@@ -18,7 +18,7 @@ Notas de mapeamento TS→Python:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional, Protocol, TypeVar
+from typing import Any, Dict, List, Literal, Optional, Protocol, TypeVar
 
 # ─── Manifest (subset of the real AgentSpecProps) ────────────────────────────
 
@@ -130,6 +130,11 @@ class PumpConfig:
     sampling: Optional[float] = None
     # Scanning OWASP LLM (default ON quando habilitado).
     security: Optional[SecurityOptions] = None
+    # Logger de diagnóstico opcional (duck-typed: warn(msg, meta)/debug(msg, meta)).
+    # Quando presente, o SDK reporta falhas de export (auth 401/403, rede, 5xx) em
+    # vez de degradar em silêncio — o sinal mais útil quando a telemetria "não
+    # chega". Ausente → silencioso (default). Nunca recebe valores sensíveis.
+    logger: Optional[Any] = None
 
 
 # ─── Resource attributes produced by the SDK ─────────────────────────────────
