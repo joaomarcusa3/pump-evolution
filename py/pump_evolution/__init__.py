@@ -92,6 +92,7 @@ from .mcp_instrumentation import (
     instrument_mcp_server,
     trace_mcp_tool,
 )
+from .chat_recorder import OPERACAO_CHAT, record_chat
 from .core import PumpEvolution, PumpInitInternals, init
 from .types import (
     AgentManifest,
@@ -118,6 +119,7 @@ from .types import (
 __version__ = "0.0.1"
 
 __all__ = [
+    "record_chat",
     # entry point
     "PumpEvolution",
     "init",
