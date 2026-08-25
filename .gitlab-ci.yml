@@ -48,11 +48,10 @@ build-tarball:
   script:
     - corepack enable
     - corepack prepare pnpm@${PNPM_VERSION} --activate
-    # Sem --frozen-lockfile: o repositorio nao versiona pnpm-lock.yaml, entao
-    # nao ha lockfile para congelar. Isso significa que dois builds do mesmo
-    # commit podem resolver dependencias diferentes -- vale commitar um lockfile
-    # em MR propria e voltar a travar aqui.
-    - pnpm install
+    # --frozen-lockfile: build reproduzivel. Sem lockfile versionado, o CI
+    # resolvia versoes diferentes a cada run -- foi assim que instalou
+    # typescript 5.9.3 onde o package.json pede ^5.6.3.
+    - pnpm install --frozen-lockfile
     - pnpm run build
     - npm pack
   artifacts:
