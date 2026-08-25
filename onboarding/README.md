@@ -1,53 +1,55 @@
-# Kit de onboarding — pump-evolution
+# Onboarding — instrumentar um serviço com o pump-evolution
 
-Material de integração produzido durante o onboarding real de um agente externo
-(SuperDoc Consórcio, agosto/2026). Trazido para o repositório **sem alteração**:
-os arquivos são cópia byte a byte do que foi usado em produção.
+Material para levar um serviço qualquer — agente ou conector MCP, em Python ou
+Node, dentro ou fora da AWS — a reportar telemetria governada ao Control Tower
+AI.
 
-## Por que isto está aqui
+Nasceu do primeiro onboarding real, em agosto de 2026, quando cada armadilha
+aqui listada foi encontrada na marra. Mas nada aqui é específico daquele
+serviço: os endpoints são parâmetros, e o código que era para copiar virou
+módulo do pacote.
 
-Até agora este material vivia apenas na máquina de quem fez o onboarding. O SDK
-publicado entrega a biblioteca, mas não o caminho de integração — descobrir que o
-span precisa de `gen_ai.operation.name = "chat"`, que `202` com `accepted: 0` é
-descarte silencioso, ou que `department` vem do `id_token` e não do grupo interno
-custou uma manhã de tentativa e erro. Este diretório existe para que a próxima
-integração não repita esse custo.
+## Se você é um agente de IA
 
-Leia como **registro do que foi necessário**, não como especificação do que o SDK
-já faz.
+Comece por **[`PROMPT_AGENTE.md`](./PROMPT_AGENTE.md)**. Ele é a instrução
+completa: o que descobrir sozinho, o que perguntar ao humano em vez de
+inventar, a ordem de instalação e como validar de verdade.
 
-## Conteúdo
+## Se você é uma pessoa
 
-| Arquivo | O que é |
+| Arquivo | Para quê |
 | --- | --- |
+| [`PROMPT_AGENTE.md`](./PROMPT_AGENTE.md) | Entregue a um Kiro/Claude/Cursor junto com o zip e as credenciais |
 | [`CHECKLIST_ONBOARDING.md`](./CHECKLIST_ONBOARDING.md) | Passo a passo de ponta a ponta, incluindo o que **não** precisa ser feito |
-| [`LICOES_APRENDIDAS.md`](./LICOES_APRENDIDAS.md) | Dez armadilhas encontradas na prática, com o sintoma de cada uma |
-| [`GUIA_INTEGRACAO.md`](./GUIA_INTEGRACAO.md) | Guia de integração Python/FastAPI, com os trechos de código |
-| [`middleware_fastapi.py`](./middleware_fastapi.py) | Middleware de identidade pronto para copiar e adaptar |
-| [`manifest.template.yaml`](./manifest.template.yaml) | Template do manifesto do agente |
+| [`LICOES_APRENDIDAS.md`](./LICOES_APRENDIDAS.md) | As dez armadilhas encontradas na prática, com o sintoma de cada uma |
+| [`GUIA_INTEGRACAO.md`](./GUIA_INTEGRACAO.md) | Guia Python/FastAPI, com os trechos de código |
+| [`manifest.template.yaml`](./manifest.template.yaml) | Template do manifesto do serviço |
 
-## Ressalvas importantes
+## O que você precisa ter em mãos
 
-**Estes arquivos não são o estado desejado.** Vários deles existem porque o SDK
-ainda não cobre o caso:
+Tudo isto sai da aba **SDK & Telemetria** do componente, no portal:
 
-- `middleware_fastapi.py` é código que cada integrador copia e adapta. Deveria ser
-  um módulo do pacote (`pump_evolution.integrations.fastapi`), importável e testado.
-  Como está, ele carrega imports específicos da aplicação de origem
-  (`src.db.models.Setting`) que **não funcionam** em outro projeto sem edição.
-- A seção 5.2 do guia descreve ~30 linhas de span manual para todo provider que não
-  seja Bedrock. É aí que nasce o `accepted: 0`: basta esquecer um atributo. Deveria
-  ser uma chamada do SDK.
-- O `manifest.template.yaml` traz o endpoint de telemetria fixo no valor de um
-  ambiente específico. O endpoint correto varia por conta e é derivado pela
-  plataforma — o template não deveria fixá-lo.
+- `canonical_name` do componente registrado
+- `otelEndpoint` — o receiver **da conta onde o componente vive**
+- `serviceAccountId` (client_id) e o client_secret, com escopo `telemetry:write`
+- `tokenUrl` — endpoint OAuth do Cognito da plataforma
 
-**Falta um arquivo.** O kit original inclui um `.env.pump.template`. Ele não foi
-trazido nesta MR: o ambiente de quem preparou o commit bloqueia leitura de arquivos
-`.env*`, e um arquivo não lido não deve ser publicado. O conteúdo aparece
-reproduzido na seção 3 do `GUIA_INTEGRACAO.md`. Adicione-o em commit próprio depois
-de confirmar que não há segredo real dentro.
+Nenhum desses valores deve ser deduzido ou copiado de outro projeto. Eles mudam
+por ambiente, e apontar para o lugar errado não dá erro — só telemetria que
+nunca chega.
 
-**Os valores de exemplo apontam para uma conta específica.** Endpoints e domínios
-Cognito citados nos documentos são do ambiente onde o onboarding aconteceu. Confira
-os valores da sua conta na página do componente no portal antes de copiar.
+## O que mudou na 0.0.2
+
+Três coisas que este material pedia deixaram de ser trabalho manual:
+
+- **`record_chat()`** — providers fora do Bedrock deixam de exigir ~30 linhas
+  de span montado à mão. Era ali que nascia o `accepted: 0`.
+- **`pump_evolution.integrations.fastapi`** — o middleware de identidade virou
+  módulo importável. O arquivo solto que existia aqui foi removido: não há mais
+  nada para copiar e adaptar.
+- **O logger reporta o veredito do receiver** — quando o lote é aceito e
+  descartado, o SDK passa a dizer, em vez de deixar tudo parecendo bem.
+
+Os textos ainda descrevem os caminhos antigos em alguns pontos, para explicar
+*por que* as coisas são como são. Onde houver divergência, o código do pacote
+manda.

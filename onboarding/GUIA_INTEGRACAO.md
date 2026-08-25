@@ -52,7 +52,7 @@ allowedTools: []                   # lista de tools permitidas (vazio = sem chec
 
 runtime:
   telemetry:
-    otelEndpoint: https://d3eaaghzw7ojx8.cloudfront.net/api/telemetry/v1/traces
+    otelEndpoint: <otelEndpoint — pegue na aba SDK & Telemetria do componente>
     serviceAccountId: <client_id do service account>
 ```
 
@@ -60,10 +60,10 @@ runtime:
 
 ```env
 PUMP_EVOLUTION_ENABLED=true
-PUMP_OTEL_ENDPOINT=https://d3eaaghzw7ojx8.cloudfront.net/api/telemetry/v1/traces
+PUMP_OTEL_ENDPOINT=<otelEndpoint — pegue na aba SDK & Telemetria do componente>
 PUMP_SERVICE_ACCOUNT_CLIENT_ID=<client_id>
 PUMP_SERVICE_ACCOUNT_CLIENT_SECRET=<secret do portal - NUNCA no git>
-PUMP_SERVICE_ACCOUNT_TOKEN_URL=https://topaz-cta-dev.auth.us-east-1.amazoncognito.com/oauth2/token
+PUMP_SERVICE_ACCOUNT_TOKEN_URL=<tokenUrl — pegue na aba SDK & Telemetria do componente>
 ```
 
 ### 4. Inserir no entrypoint (main.py)
@@ -96,72 +96,50 @@ if _env_pump_path.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 ```
 
-#### 4.2 Middleware de identidade (antes do rate limiter / após auth)
+#### 4.2 Middleware de identidade (após o auth do seu app)
+
+A partir da 0.0.2 isto é um módulo do pacote. Não copie código:
 
 ```python
-class PumpIdentityMiddleware(_PumpBaseMiddleware):
-    async def dispatch(self, request, call_next):
-        if not _PUMP_AVAILABLE or _pump_handle is None:
-            return await call_next(request)
-        user_state = getattr(request.state, "user", None)
-        if user_state is None:
-            return await call_next(request)
-
-        user_email = getattr(user_state, "email", None) or getattr(user_state, "user_id", None)
-
-        # Resolve department do id_token guardado (claims custom do Cognito)
-        _department = None
-        _cost_center = None
-        try:
-            import base64 as _b64, json as _json
-            # ADAPTAR: onde o agente guarda o id_token do usuário
-            from src.db.database import AsyncSessionLocal
-            from src.db.models import Setting
-            from sqlalchemy import select as _sel
-            if user_email:
-                async with AsyncSessionLocal() as _db:
-                    _r = await _db.execute(
-                        _sel(Setting).where(Setting.key == f"aws_oidc_token:{user_email}")
-                    )
-                    _setting = _r.scalar_one_or_none()
-                    if _setting and _setting.value:
-                        _parts = _setting.value.split(".")
-                        if len(_parts) >= 2:
-                            _pad = "=" * (-len(_parts[1]) % 4)
-                            _claims = _json.loads(_b64.urlsafe_b64decode(_parts[1] + _pad))
-                            _department = (
-                                _claims.get("custom:department")
-                                or _claims.get("custom:topaz_directorate")
-                            )
-                            _cost_center = (
-                                _claims.get("custom:cost_center")
-                                or _claims.get("custom:cta_cost_center")
-                            )
-        except Exception:
-            pass  # nunca quebra o request por causa de telemetria
-
-        user_ctx = UserContext(
-            user_id=user_email,
-            department=_department,
-            cost_center=_cost_center,
-        )
-        token = _identity_store.set(user_ctx)
-        try:
-            response = await call_next(request)
-        finally:
-            _identity_store.reset(token)
-        return response
+from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
 
 app.add_middleware(PumpIdentityMiddleware)
 ```
 
-**ADAPTAR:** O trecho que lê o id_token (`Setting.key == f"aws_oidc_token:{user_email}"`) depende de ONDE o agente guarda o JWT do login. Pode ser:
-- Uma tabela `Setting` (como no SuperDoc)
-- Um cookie
-- Uma variável de sessão
-- O header `Authorization` da request atual
+Assim ele lê `request.state.user` — a convenção mais comum em FastAPI — e
+propaga o usuário para todo span emitido durante a requisição.
 
-O importante é **decodificar o payload do JWT** (base64 do segundo segmento) e extrair `custom:department`.
+**Se o seu app guarda o usuário em outro lugar**, passe um resolvedor:
+
+```python
+app.add_middleware(
+    PumpIdentityMiddleware,
+    user_resolver=lambda request: request.scope.get("usuario_logado"),
+)
+```
+
+**Para ter `department` e `cost_center`**, o SDK precisa do `id_token` que o
+seu app já guardou no login. Onde ele está varia por projeto — banco, cookie,
+sessão, cabeçalho —, então entra por callback:
+
+```python
+async def buscar_id_token(request, email):
+    # troque pelo seu caso: consulta ao banco, request.cookies.get("id_token"),
+    # request.headers.get("Authorization"), sessão...
+    return await meu_repositorio.token_de(email)
+
+app.add_middleware(PumpIdentityMiddleware, id_token_resolver=buscar_id_token)
+```
+
+Por que isso importa: o grupo de acesso interno do app (`Administrador`,
+`Operador`) **não** é o departamento da pessoa. O departamento real vem dos
+claims `custom:department` / `custom:topaz_directorate` do Cognito, e é ele que
+sustenta o custo por centro de custo no portal. Sem o `id_token`, o span sai
+com o usuário certo e sem departamento.
+
+O SDK **não valida** o JWT — ele confia no seu middleware de autenticação, que
+já resolveu quem é a pessoa. Só decodifica o payload para ler os claims.
+
 
 #### 4.3 Init no startup
 
@@ -234,43 +212,43 @@ O SDK intercepta `converse()` e emite span `chat` com:
 - `gen_ai.usage.input_tokens` / `output_tokens`
 - `enduser.id` (do contextvars propagado pelo middleware)
 
-#### 5.2 Outros providers (OpenAI, SAI, etc.) — manual
+#### 5.2 Outros providers (OpenAI, Anthropic, SAI, LangChain)
 
-O SDK não auto-instrumenta providers não-Bedrock. Use wrapper:
+O SDK não auto-instrumenta providers fora do Bedrock. A partir da 0.0.2, uma
+chamada resolve:
 
 ```python
-# Após a chamada: response = await llm.ainvoke(messages)
-try:
-    from opentelemetry import trace
-    from pump_evolution.constants import (
-        GEN_AI_OPERATION_NAME, GEN_AI_REQUEST_MODEL,
-        GEN_AI_USAGE_INPUT_TOKENS, GEN_AI_USAGE_OUTPUT_TOKENS,
-        CTA_USAGE_TOKENS_AVAILABLE,
-    )
-    from pump_evolution.identity_context import apply_identity_to_span
+from pump_evolution import record_chat
 
-    tracer = trace.get_tracer("pump-evolution")
-    model_name = getattr(llm, "model", "unknown")
+resposta = await llm.ainvoke(mensagens)
 
-    # Extrair tokens da resposta LangChain
-    input_tokens = 0
-    output_tokens = 0
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        input_tokens = response.usage_metadata.get("input_tokens", 0)
-        output_tokens = response.usage_metadata.get("output_tokens", 0)
-
-    with tracer.start_as_current_span(f"chat {model_name}", kind=trace.SpanKind.CLIENT) as span:
-        span.set_attribute(GEN_AI_OPERATION_NAME, "chat")
-        span.set_attribute(GEN_AI_REQUEST_MODEL, str(model_name))
-        if input_tokens or output_tokens:
-            span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
-            span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
-            span.set_attribute(CTA_USAGE_TOKENS_AVAILABLE, True)
-        apply_identity_to_span(span)
-        span.set_status(trace.Status(trace.StatusCode.OK))
-except Exception:
-    pass
+record_chat(
+    model=getattr(llm, "model", "desconhecido"),
+    input_tokens=(resposta.usage_metadata or {}).get("input_tokens"),
+    output_tokens=(resposta.usage_metadata or {}).get("output_tokens"),
+    provider="openai",
+)
 ```
+
+Se a chamada ao modelo falhar, registre também — falha registrada vale mais
+que silêncio:
+
+```python
+try:
+    resposta = await llm.ainvoke(mensagens)
+except Exception as erro:
+    record_chat(model="gpt-4o", error=erro)
+    raise
+```
+
+`record_chat` nunca levanta exceção: erro de telemetria devolve `False` e o
+seu código segue.
+
+**Por que não montar o span à mão:** o receiver do CTA só aceita spans com
+`gen_ai.operation.name = "chat"`. Esquecer esse atributo faz ele responder
+`202` com `accepted: 0` — request aceito, span descartado, nenhum erro visível.
+Era a armadilha mais cara deste SDK, e `record_chat` existe para eliminá-la.
+
 
 ### 6. Dockerfile (deploy reproduzível)
 
