@@ -81,7 +81,9 @@ não quebra nada. Use isso para introduzir a mudança com segurança.
 **Init uma vez no boot**, nunca por requisição. **Shutdown** no encerramento,
 para não perder o último lote.
 
-**Identidade do usuário** — em FastAPI, use o módulo pronto:
+**Identidade do usuário** — em FastAPI (Python) use o módulo pronto. Em Node
+não há middleware pronto: use `runWithIdentity` do pacote, envolvendo o
+tratamento da requisição depois que o auth do app resolveu quem é a pessoa.
 
 ```python
 from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
@@ -99,12 +101,20 @@ humano se for esse o caso.
 client boto3.
 
 **Qualquer outro provider** usa `record_chat` — uma chamada, não um span
-montado à mão:
+montado à mão. Existe nas duas stacks:
 
 ```python
+# Python
 from pump_evolution import record_chat
 
 record_chat(model="gpt-4o", input_tokens=120, output_tokens=45, provider="openai")
+```
+
+```ts
+// Node
+import { recordChat } from '@topaz-ia/pump-evolution';
+
+recordChat({ model: 'gpt-4o', inputTokens: 120, outputTokens: 45, provider: 'openai' });
 ```
 
 ## 6. Valide — e não confie em "subiu sem erro"
@@ -122,8 +132,9 @@ portal do CTA, na página do componente:
 
 **`202` com `accepted: 0` é descarte silencioso.** O receiver aceita o request
 e joga o span fora quando não reconhece o formato — normalmente por falta de
-`gen_ai.operation.name = "chat"`. A partir da 0.0.2 o SDK avisa no logger
-quando isso acontece; passe um `logger` na configuração para ver.
+`gen_ai.operation.name = "chat"`. A partir da 0.0.2 o SDK **Python** avisa no
+logger quando isso acontece; passe um `logger` na configuração para ver. No
+Node esse aviso ainda não existe — ali a validação do passo 6 é a única rede.
 
 **Departamento não é grupo de acesso.** `Administrador` é papel no app; o
 departamento vem dos claims `custom:department` ou `custom:topaz_directorate`.

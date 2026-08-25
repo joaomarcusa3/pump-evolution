@@ -77,6 +77,8 @@ export type { SecurityEvaluationInput } from './security-checker.js';
 export { ServiceAccountTokenProvider, DEFAULT_TELEMETRY_SCOPE } from './token-provider.js';
 export type { FetchLike, ServiceAccountTokenProviderDeps } from './token-provider.js';
 export { backoffDelayMs, CircuitBreaker, withRetry } from './resilience.js';
+export { CHAT_OPERATION, recordChat } from './chat-recorder.js';
+export type { RecordChatInput } from './chat-recorder.js';
 export type { CircuitBreakerOptions, CircuitState, RetryOptions } from './resilience.js';
 export { createOtlpBatchProcessor, ResilientAuthSpanExporter } from './otlp-exporter.js';
 export type {
