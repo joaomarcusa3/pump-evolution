@@ -13,6 +13,20 @@
 # tudo: Node para compilar, Python para montar, AWS CLI para publicar.
 # =============================================================================
 
+# Os runners deste GitLab sao registrados COM tag: job sem tag nao encontra
+# executor e fica pendente para sempre. Foi o que aconteceu no primeiro merge
+# desta pipeline -- ela entrou no main e nunca rodou.
+#
+# `eks` e o runner default do grupo (#255, "Run project default"), o mesmo que
+# a pipeline da plataforma usa em todos os jobs, inclusive nos que falam com a
+# AWS via amazon/aws-cli.
+default:
+  tags:
+    - eks
+  retry:
+    max: 2
+    when: runner_system_failure
+
 stages:
   - build
   - package
