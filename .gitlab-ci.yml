@@ -9,17 +9,13 @@
 # existiam dentro dele. Esta pipeline fecha o elo: mergeou em `main`, o zip é
 # reconstruído a partir do repositório e publicado na conta.
 #
-# Três jobs, cada um com a ferramenta certa, em vez de uma imagem que carrega
-# tudo: Node para compilar, Python para montar, AWS CLI para publicar.
+# Três jobs, cada um com a ferramenta certa: Node para compilar, Python para
+# montar, AWS CLI para publicar.
 # =============================================================================
 
-# Os runners deste GitLab sao registrados COM tag: job sem tag nao encontra
-# executor e fica pendente para sempre. Foi o que aconteceu no primeiro merge
-# desta pipeline -- ela entrou no main e nunca rodou.
-#
-# `eks` e o runner default do grupo (#255, "Run project default"), o mesmo que
-# a pipeline da plataforma usa em todos os jobs, inclusive nos que falam com a
-# AWS via amazon/aws-cli.
+# Os runners deste GitLab são registrados COM tag: job sem tag não encontra
+# executor e fica pendente para sempre. `eks` é o runner default do grupo, o
+# mesmo que a pipeline da plataforma usa em todos os jobs.
 default:
   tags:
     - eks
@@ -33,13 +29,12 @@ stages:
   - publish
 
 variables:
-  # Sem fixar a versao, `corepack enable` baixa o pnpm mais recente -- que hoje
+  # Sem fixar a versão, `corepack enable` baixa o pnpm mais recente — que hoje
   # exige Node >= 22.13 e quebra na imagem node:20 com ERR_UNKNOWN_BUILTIN_MODULE
-  # (node:sqlite). Mesma versao que a plataforma usa.
+  # (node:sqlite). Mesma versão que a plataforma usa.
   PNPM_VERSION: '9.12.3'
   BUCKET: topaz-tooling-deploy-artifacts-029765331397
   AWS_REGION: us-east-1
-  ROLE_ARN: arn:aws:iam::029765331397:role/topaz-tooling-sdk-publisher
 
 # ── Compila o TypeScript e gera o tarball npm ────────────────────────────────
 build-tarball:
@@ -48,8 +43,8 @@ build-tarball:
   script:
     - corepack enable
     - corepack prepare pnpm@${PNPM_VERSION} --activate
-    # --frozen-lockfile: build reproduzivel. Sem lockfile versionado, o CI
-    # resolvia versoes diferentes a cada run -- foi assim que instalou
+    # --frozen-lockfile: build reproduzível. Sem lockfile versionado, o CI
+    # resolvia versões diferentes a cada run — foi assim que instalou
     # typescript 5.9.3 onde o package.json pede ^5.6.3.
     - pnpm install --frozen-lockfile
     - pnpm run build
@@ -64,6 +59,11 @@ build-tarball:
 # `--skip-build` porque o tarball vem do job anterior. A receita confere as
 # versões declaradas e falha se divergirem — publicar um artefato que mente
 # sobre a própria versão atrapalha todo diagnóstico depois.
+#
+# A versão sai daqui como dotenv, em vez de ser extraída no shell do job de
+# publicação: `sed` com backreference dentro de YAML dentro de shell já custou
+# um arquivo corrompido, e não traz retorno nenhum. Aqui é uma linha de Python
+# lendo o package.json.
 package-zip:
   stage: package
   image: python:3.12-slim
@@ -71,79 +71,57 @@ package-zip:
     - build-tarball
   script:
     - python scripts/build_vendor_zip.py --skip-build
+    - python -c "import json; print('VERSAO=' + json.load(open('package.json'))['version'])" > versao.env
+    - cat versao.env
   artifacts:
     paths:
       - dist-zip/pump-evolution-latest.zip
+    reports:
+      dotenv: versao.env
     expire_in: 1 week
 
 # ── Publica no S3 da conta ───────────────────────────────────────────────────
 #
-# Credencial por OIDC, sem chave estática: o GitLab emite um id_token e a role
-# `topaz-tooling-sdk-publisher` confia nele. A trust policy restringe ao branch
-# `main` DESTE projeto, e a permissão é só `s3:PutObject` no prefixo `sdk/`.
+# Sem assume-role e sem OIDC: o runner no Kubernetes já roda com credencial AWS
+# anexada, e é assim que TODA a pipeline da plataforma opera — ela registra task
+# definitions e faz deploy em produção chamando `aws` direto, sem configurar
+# credencial nenhuma.
+#
+# A tentativa anterior montou federação OIDC do zero (role, trust policy,
+# audiência) e falhou com InvalidIdentityToken. Era mecanismo que este ambiente
+# não usa. Publicar um zip não justifica infraestrutura de identidade própria
+# quando existe um caminho comprovado ao lado.
+#
+# Contrapartida assumida: a credencial do runner é compartilhada entre projetos
+# com a tag `eks`. O OIDC amarraria a publicação a este repositório e a este
+# branch; sem ele, a fronteira é a mesma que a plataforma já aceita para deploy
+# em produção.
 #
 # Duas chaves: a versionada dá rastreabilidade e rollback; a `latest` é a que a
-# API lê (o caminho é fixo em sdk.ts). O bucket tem versionamento ligado, então
-# uma publicação ruim é reversível.
-#
-# A versionada sai sempre; a `latest` só com PROMOVER_LATEST=true. Trocar a
-# `latest` troca na hora o que todo integrador baixa — isso não deve acontecer
-# por inércia, e menos ainda num primeiro run cujo build nunca foi exercitado.
+# API lê — o caminho é fixo em sdk.ts. A versionada sai sempre; a `latest` só
+# com PROMOVER_LATEST=true, para não trocar por inércia o artefato que todo
+# integrador baixa. O bucket tem versionamento ligado.
 publish-s3:
   stage: publish
   image: amazon/aws-cli:latest
   needs:
     - package-zip
-  id_tokens:
-    GITLAB_OIDC_TOKEN:
-      # A audiencia TEM de ser uma das que o provider OIDC desta conta aceita.
-      # O provider arn:...:oidc-provider/gitlab.topazevolution.com declara
-      # ClientIDList = ["https://gitlab.topazevolution.com"] e mais nenhuma.
-      #
-      # Pedir `sts.amazonaws.com` (o valor que a documentacao da AWS sugere
-      # como padrao) faz a AWS recusar o token antes de avaliar qualquer
-      # condicao, com InvalidIdentityToken -- que e diferente de AccessDenied
-      # e nao indica problema na trust policy.
-      #
-      # A condicao `aud` na trust policy da role precisa casar com este valor.
-      aud: https://gitlab.topazevolution.com
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-  before_script:
-    - yum install -y jq >/dev/null 2>&1 || true
   script:
     - |
-      VERSAO=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' package.json | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-      if [ -z "$VERSAO" ]; then
-        echo "Não consegui ler a versão do package.json. Sem publicar."
+      if [ -z "${VERSAO}" ]; then
+        echo "VERSAO nao veio do job package-zip. Sem publicar."
         exit 1
       fi
-      echo "Publicando a versão ${VERSAO}"
-
-      CREDS=$(aws sts assume-role-with-web-identity \
-        --role-arn "${ROLE_ARN}" \
-        --role-session-name "sdk-publisher-${CI_PIPELINE_ID}" \
-        --web-identity-token "${GITLAB_OIDC_TOKEN}" \
-        --duration-seconds 900 \
-        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
-        --output text)
-      export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | cut -f1)
-      export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | cut -f2)
-      export AWS_SESSION_TOKEN=$(echo "$CREDS" | cut -f3)
+      echo "Publicando a versao ${VERSAO}"
+      echo "Identidade do runner: $(aws sts get-caller-identity --query Arn --output text)"
 
       ZIP=dist-zip/pump-evolution-latest.zip
 
-      # A versionada SEMPRE: e ela que da rastreabilidade e rollback.
       aws s3 cp "$ZIP" "s3://${BUCKET}/sdk/pump-evolution-${VERSAO}.zip" --region "${AWS_REGION}"
       echo "Publicado: sdk/pump-evolution-${VERSAO}.zip"
 
-      # A `latest` e a chave que a API le -- publicar nela troca, na hora, o
-      # artefato que todo integrador baixa. Por isso ela exige PROMOVER_LATEST
-      # explicito, e nao acontece por inercia.
-      #
-      # Enquanto esta pipeline nao tiver rodado uma vez e o resultado nao tiver
-      # sido conferido contra o zip anterior, deixe desligado: o build do
-      # TypeScript nunca rodou aqui, e ninguem sabe o que o tsup produz.
       if [ "${PROMOVER_LATEST:-false}" = "true" ]; then
         aws s3 cp "$ZIP" "s3://${BUCKET}/sdk/pump-evolution-latest.zip" --region "${AWS_REGION}"
         echo "Promovido para sdk/pump-evolution-latest.zip"
