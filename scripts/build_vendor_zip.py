@@ -45,6 +45,12 @@ NOME_ZIP = "pump-evolution-latest.zip"
 # codigo — sem eles, o onboarding vira descoberta por tentativa e erro.
 DOCS = ["CHANGELOG.md", "INSTALL.md", "README.md", "SKILL.md", ".env.example"]
 
+# Material de integracao produzido no onboarding do primeiro agente externo.
+# Vai DENTRO do pacote de proposito: sem ele, quem baixa o SDK recebe a
+# biblioteca e descobre o resto por tentativa e erro -- que foi exatamente o que
+# custou uma manha de trabalho e originou estes arquivos.
+ONBOARDING = "onboarding"
+
 # Data fixa nas entradas do zip. Sem isto, dois builds do mesmo commit geram
 # arquivos diferentes e qualquer comparacao vira ruido.
 DATA_FIXA = (2026, 1, 1, 0, 0, 0)
@@ -134,6 +140,20 @@ def preparar(versao: str, tgz: Path) -> None:
         if not origem.exists():
             erro(f"{nome} nao existe no repositorio — o pacote nao pode sair sem ele")
         copiar(origem, PREPARO / nome)
+
+    origem_onb = RAIZ / ONBOARDING
+    if not origem_onb.is_dir():
+        erro(
+            f"{ONBOARDING}/ nao existe no repositorio. O pacote nao pode sair sem o "
+            "material de integracao -- e ele que evita que cada onboarding vire "
+            "descoberta por tentativa e erro."
+        )
+    destino_onb = PREPARO / ONBOARDING
+    destino_onb.mkdir()
+    for arquivo in sorted(origem_onb.iterdir()):
+        if arquivo.is_file():
+            copiar(arquivo, destino_onb / arquivo.name)
+    print(f"  onboarding: {len(list(destino_onb.iterdir()))} arquivos")
 
     (PREPARO / "node").mkdir()
     shutil.copyfile(tgz, PREPARO / "node" / tgz.name)
