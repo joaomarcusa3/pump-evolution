@@ -1,0 +1,128 @@
+# =============================================================================
+# pump-evolution — build, empacotamento e publicação do vendor zip
+#
+# O SDK não está no npm nem no PyPI público: é distribuído como zip no S3 e
+# servido pela plataforma em GET /api/sdk/download (ADR-0055/0057).
+#
+# Até 25/08/2026 esse zip era montado e enviado à mão. O resultado foi que o
+# artefato ficou À FRENTE do repositório — havia código e documentação que só
+# existiam dentro dele. Esta pipeline fecha o elo: mergeou em `main`, o zip é
+# reconstruído a partir do repositório e publicado na conta.
+#
+# Três jobs, cada um com a ferramenta certa, em vez de uma imagem que carrega
+# tudo: Node para compilar, Python para montar, AWS CLI para publicar.
+# =============================================================================
+
+stages:
+  - build
+  - package
+  - publish
+
+variables:
+  BUCKET: topaz-tooling-deploy-artifacts-029765331397
+  AWS_REGION: us-east-1
+  ROLE_ARN: arn:aws:iam::029765331397:role/topaz-tooling-sdk-publisher
+
+# ── Compila o TypeScript e gera o tarball npm ────────────────────────────────
+build-tarball:
+  stage: build
+  image: node:20-bookworm
+  script:
+    - corepack enable
+    # Sem --frozen-lockfile: o repositorio nao versiona pnpm-lock.yaml, entao
+    # nao ha lockfile para congelar. Isso significa que dois builds do mesmo
+    # commit podem resolver dependencias diferentes -- vale commitar um lockfile
+    # em MR propria e voltar a travar aqui.
+    - pnpm install
+    - pnpm run build
+    - npm pack
+  artifacts:
+    paths:
+      - topaz-ia-pump-evolution-*.tgz
+    expire_in: 1 day
+
+# ── Monta o vendor zip a partir do repositório ───────────────────────────────
+#
+# `--skip-build` porque o tarball vem do job anterior. A receita confere as
+# versões declaradas e falha se divergirem — publicar um artefato que mente
+# sobre a própria versão atrapalha todo diagnóstico depois.
+package-zip:
+  stage: package
+  image: python:3.12-slim
+  needs:
+    - build-tarball
+  script:
+    - python scripts/build_vendor_zip.py --skip-build
+  artifacts:
+    paths:
+      - dist-zip/pump-evolution-latest.zip
+    expire_in: 1 week
+
+# ── Publica no S3 da conta ───────────────────────────────────────────────────
+#
+# Credencial por OIDC, sem chave estática: o GitLab emite um id_token e a role
+# `topaz-tooling-sdk-publisher` confia nele. A trust policy restringe ao branch
+# `main` DESTE projeto, e a permissão é só `s3:PutObject` no prefixo `sdk/`.
+#
+# Duas chaves: a versionada dá rastreabilidade e rollback; a `latest` é a que a
+# API lê (o caminho é fixo em sdk.ts). O bucket tem versionamento ligado, então
+# uma publicação ruim é reversível.
+#
+# A versionada sai sempre; a `latest` só com PROMOVER_LATEST=true. Trocar a
+# `latest` troca na hora o que todo integrador baixa — isso não deve acontecer
+# por inércia, e menos ainda num primeiro run cujo build nunca foi exercitado.
+publish-s3:
+  stage: publish
+  image: amazon/aws-cli:latest
+  needs:
+    - package-zip
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: sts.amazonaws.com
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - yum install -y jq >/dev/null 2>&1 || true
+  script:
+    - |
+      VERSAO=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' package.json | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+      if [ -z "$VERSAO" ]; then
+        echo "Não consegui ler a versão do package.json. Sem publicar."
+        exit 1
+      fi
+      echo "Publicando a versão ${VERSAO}"
+
+      CREDS=$(aws sts assume-role-with-web-identity \
+        --role-arn "${ROLE_ARN}" \
+        --role-session-name "sdk-publisher-${CI_PIPELINE_ID}" \
+        --web-identity-token "${GITLAB_OIDC_TOKEN}" \
+        --duration-seconds 900 \
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+        --output text)
+      export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | cut -f1)
+      export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | cut -f2)
+      export AWS_SESSION_TOKEN=$(echo "$CREDS" | cut -f3)
+
+      ZIP=dist-zip/pump-evolution-latest.zip
+
+      # A versionada SEMPRE: e ela que da rastreabilidade e rollback.
+      aws s3 cp "$ZIP" "s3://${BUCKET}/sdk/pump-evolution-${VERSAO}.zip" --region "${AWS_REGION}"
+      echo "Publicado: sdk/pump-evolution-${VERSAO}.zip"
+
+      # A `latest` e a chave que a API le -- publicar nela troca, na hora, o
+      # artefato que todo integrador baixa. Por isso ela exige PROMOVER_LATEST
+      # explicito, e nao acontece por inercia.
+      #
+      # Enquanto esta pipeline nao tiver rodado uma vez e o resultado nao tiver
+      # sido conferido contra o zip anterior, deixe desligado: o build do
+      # TypeScript nunca rodou aqui, e ninguem sabe o que o tsup produz.
+      if [ "${PROMOVER_LATEST:-false}" = "true" ]; then
+        aws s3 cp "$ZIP" "s3://${BUCKET}/sdk/pump-evolution-latest.zip" --region "${AWS_REGION}"
+        echo "Promovido para sdk/pump-evolution-latest.zip"
+      else
+        echo "latest NAO promovida (PROMOVER_LATEST != true)."
+        echo "Confira o artefato versionado e rode de novo com PROMOVER_LATEST=true para promover:"
+        echo "  aws s3 cp s3://${BUCKET}/sdk/pump-evolution-${VERSAO}.zip ./novo.zip"
+      fi
+  environment:
+    name: tooling

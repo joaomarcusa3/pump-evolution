@@ -17,6 +17,9 @@ coverage/
 # Packaged tarballs
 *.tgz
 
+# Vendor zip montado por scripts/build_vendor_zip.py
+dist-zip/
+
 # Env (nunca commitar segredos)
 .env
 .env.local
