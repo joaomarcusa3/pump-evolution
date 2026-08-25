@@ -96,7 +96,17 @@ publish-s3:
     - package-zip
   id_tokens:
     GITLAB_OIDC_TOKEN:
-      aud: sts.amazonaws.com
+      # A audiencia TEM de ser uma das que o provider OIDC desta conta aceita.
+      # O provider arn:...:oidc-provider/gitlab.topazevolution.com declara
+      # ClientIDList = ["https://gitlab.topazevolution.com"] e mais nenhuma.
+      #
+      # Pedir `sts.amazonaws.com` (o valor que a documentacao da AWS sugere
+      # como padrao) faz a AWS recusar o token antes de avaliar qualquer
+      # condicao, com InvalidIdentityToken -- que e diferente de AccessDenied
+      # e nao indica problema na trust policy.
+      #
+      # A condicao `aud` na trust policy da role precisa casar com este valor.
+      aud: https://gitlab.topazevolution.com
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
