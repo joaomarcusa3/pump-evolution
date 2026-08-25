@@ -33,6 +33,10 @@ stages:
   - publish
 
 variables:
+  # Sem fixar a versao, `corepack enable` baixa o pnpm mais recente -- que hoje
+  # exige Node >= 22.13 e quebra na imagem node:20 com ERR_UNKNOWN_BUILTIN_MODULE
+  # (node:sqlite). Mesma versao que a plataforma usa.
+  PNPM_VERSION: '9.12.3'
   BUCKET: topaz-tooling-deploy-artifacts-029765331397
   AWS_REGION: us-east-1
   ROLE_ARN: arn:aws:iam::029765331397:role/topaz-tooling-sdk-publisher
@@ -43,11 +47,11 @@ build-tarball:
   image: node:20-bookworm
   script:
     - corepack enable
-    # Sem --frozen-lockfile: o repositorio nao versiona pnpm-lock.yaml, entao
-    # nao ha lockfile para congelar. Isso significa que dois builds do mesmo
-    # commit podem resolver dependencias diferentes -- vale commitar um lockfile
-    # em MR propria e voltar a travar aqui.
-    - pnpm install
+    - corepack prepare pnpm@${PNPM_VERSION} --activate
+    # --frozen-lockfile: build reproduzivel. Sem lockfile versionado, o CI
+    # resolvia versoes diferentes a cada run -- foi assim que instalou
+    # typescript 5.9.3 onde o package.json pede ^5.6.3.
+    - pnpm install --frozen-lockfile
     - pnpm run build
     - npm pack
   artifacts:
