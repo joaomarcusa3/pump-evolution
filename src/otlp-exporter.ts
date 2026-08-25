@@ -24,28 +24,70 @@
  * and breaks at runtime against core 2.x — `parseKeyPairsIntoRecord` undefined.)
  */
 
-import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import {
   BatchSpanProcessor,
   type ReadableSpan,
   type SpanExporter,
   type SpanProcessor,
-} from '@opentelemetry/sdk-trace-node';
+} from "@opentelemetry/sdk-trace-node";
 
-import { CircuitBreaker } from './resilience.js';
-import { withRetry, type RetryOptions } from './resilience.js';
+import { CircuitBreaker } from "./resilience.js";
+import { withRetry, type RetryOptions } from "./resilience.js";
+import type { TelemetryLogger } from "./types.js";
+
+/**
+ * Sent as `User-Agent` on every OTLP/HTTP export. Node's `http`/`https` client
+ * (which the OTLP exporter uses under the hood) does not set a default
+ * `User-Agent`, and AWS Managed Rules' `NoUserAgent_HEADER` (part of
+ * `AWSManagedRulesCommonRuleSet`, run by both the CTA API WAF and the portal
+ * CloudFront WAF) blocks any request missing it — the batch would otherwise be
+ * dropped silently at the edge, never reaching the receiver.
+ */
+const SDK_USER_AGENT = "@topaz-ia/pump-evolution/0.0.1";
 
 // ─── Logging hook (SDK never uses console) ─────────────────────────────────────
 
 /**
- * Minimal local logger the exporter reports degradation to. Optional by design:
- * with no logger the SDK degrades truly silently (the steering forbids
- * `console.*`; the host app injects its own logger if it wants visibility).
+ * The SDK's public diagnostic contract. Defined once in `types.ts` and
+ * re-exported here so existing imports from this module keep working.
  */
-export interface TelemetryLogger {
-  warn?(message: string, meta?: Record<string, unknown>): void;
-  debug?(message: string, meta?: Record<string, unknown>): void;
+export type { TelemetryLogger };
+
+/**
+ * Extracts a structured, privacy-safe description of an export failure. OTLP/HTTP
+ * failures carry the HTTP status on `.code`/`.status` and a short body on `.data`;
+ * we surface those (truncated) plus an actionable hint for the common auth cases,
+ * so a 401/403 stops being an invisible dropped batch.
+ */
+function describeExportError(
+  error: unknown,
+): { message: string; status?: number; detail?: string; hint?: string } {
+  const asError = error instanceof Error ? error : new Error(String(error));
+  const anyErr = asError as { code?: unknown; status?: unknown; data?: unknown };
+  const status =
+    typeof anyErr.code === "number"
+      ? anyErr.code
+      : typeof anyErr.status === "number"
+        ? anyErr.status
+        : undefined;
+  const detail =
+    typeof anyErr.data === "string" && anyErr.data.length > 0
+      ? anyErr.data.slice(0, 300)
+      : undefined;
+  const hint =
+    status === 401
+      ? "auth: token inválido/expirado — verifique clientId+secret do service account (rotação invalida a credencial anterior)"
+      : status === 403
+        ? "auth: token sem o scope telemetry:write"
+        : undefined;
+  return {
+    message: asError.message,
+    ...(status !== undefined ? { status } : {}),
+    ...(detail !== undefined ? { detail } : {}),
+    ...(hint !== undefined ? { hint } : {}),
+  };
 }
 
 /** Factory that builds the underlying OTLP delegate for a given header set. */
@@ -69,7 +111,11 @@ export interface ResilientAuthSpanExporterDeps {
 
 /** Default delegate: a real bearer-authenticated OTLP/HTTP exporter. */
 function defaultDelegateFactory(endpoint: string): DelegateFactory {
-  return (headers) => new OTLPTraceExporter({ url: endpoint, headers });
+  return (headers) =>
+    new OTLPTraceExporter({
+      url: endpoint,
+      headers: { "User-Agent": SDK_USER_AGENT, ...headers },
+    });
 }
 
 /**
@@ -91,17 +137,23 @@ export class ResilientAuthSpanExporter implements SpanExporter {
   constructor(deps: ResilientAuthSpanExporterDeps) {
     this.endpoint = deps.endpoint;
     this.tokenProvider = deps.tokenProvider;
-    this.createDelegate = deps.createDelegate ?? defaultDelegateFactory(deps.endpoint);
+    this.createDelegate =
+      deps.createDelegate ?? defaultDelegateFactory(deps.endpoint);
     this.breaker = deps.breaker ?? new CircuitBreaker();
     this.retry = deps.retry ?? {};
     this.logger = deps.logger ?? {};
   }
 
-  export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
+  export(
+    spans: ReadableSpan[],
+    resultCallback: (result: ExportResult) => void,
+  ): void {
     // Circuit open → drop this batch without attempting (protects the endpoint
     // and the agent). Reported, never thrown.
     if (!this.breaker.canAttempt()) {
-      this.logger.debug?.('telemetry export skipped — circuit open', { endpoint: this.endpoint });
+      this.logger.debug?.("telemetry export skipped — circuit open", {
+        endpoint: this.endpoint,
+      });
       resultCallback({ code: ExportResultCode.FAILED });
       return;
     }
@@ -115,10 +167,13 @@ export class ResilientAuthSpanExporter implements SpanExporter {
       })
       .catch((error: unknown) => {
         this.breaker.recordFailure();
-        this.logger.warn?.('telemetry export failed — dropping batch (agent unaffected)', {
-          endpoint: this.endpoint,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        this.logger.warn?.(
+          "telemetry export failed — dropping batch (agent unaffected)",
+          {
+            endpoint: this.endpoint,
+            ...describeExportError(error),
+          },
+        );
         resultCallback({
           code: ExportResultCode.FAILED,
           error: error instanceof Error ? error : new Error(String(error)),
@@ -137,14 +192,15 @@ export class ResilientAuthSpanExporter implements SpanExporter {
 
   /** Returns a delegate whose Authorization header matches `token`. */
   private ensureDelegate(token: string): SpanExporter {
-    if (this.delegate !== undefined && this.delegateToken === token) return this.delegate;
+    if (this.delegate !== undefined && this.delegateToken === token)
+      return this.delegate;
     const previous = this.delegate;
     this.delegate = this.createDelegate({ Authorization: `Bearer ${token}` });
     this.delegateToken = token;
     // Best-effort shutdown of the superseded delegate (never throws upward).
     if (previous !== undefined) {
       void Promise.resolve(previous.shutdown()).catch((error: unknown) => {
-        this.logger.debug?.('superseded delegate shutdown failed', {
+        this.logger.debug?.("superseded delegate shutdown failed", {
           error: error instanceof Error ? error.message : String(error),
         });
       });
@@ -156,7 +212,7 @@ export class ResilientAuthSpanExporter implements SpanExporter {
     const delegate = this.delegate;
     if (delegate === undefined) return;
     const flush = (delegate as { forceFlush?: () => Promise<void> }).forceFlush;
-    if (typeof flush === 'function') await flush.call(delegate);
+    if (typeof flush === "function") await flush.call(delegate);
   }
 
   async shutdown(): Promise<void> {
@@ -165,12 +221,15 @@ export class ResilientAuthSpanExporter implements SpanExporter {
 }
 
 /** Promisifies a single delegate export: resolves on SUCCESS, rejects on FAILED. */
-function exportOnce(delegate: SpanExporter, spans: ReadableSpan[]): Promise<void> {
+function exportOnce(
+  delegate: SpanExporter,
+  spans: ReadableSpan[],
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     try {
       delegate.export(spans, (result) => {
         if (result.code === ExportResultCode.SUCCESS) resolve();
-        else reject(result.error ?? new Error('OTLP export returned FAILED'));
+        else reject(result.error ?? new Error("OTLP export returned FAILED"));
       });
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
