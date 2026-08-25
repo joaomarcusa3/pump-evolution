@@ -1,0 +1,22 @@
+# ─── Manifesto pump-evolution (SDK de telemetria) ──────────────────────────────
+# Preencher com os dados do agente registrado no portal CTA.
+# Este arquivo NÃO contém secrets — pode ir no git.
+
+name: <CANONICAL_NAME>        # ex: tpz-cel926-meu-agente-001
+kind: agent                    # agent (tem LLM) | mcp (só tools, sem modelo)
+modelId: <INFERENCE_PROFILE>   # ex: us.anthropic.claude-sonnet-4-20250514-v1:0
+                               # Obrigatório pra kind=agent. É o modelo "principal"
+                               # declarado — cada invocação real reporta o modelo
+                               # correto dinamicamente nos spans.
+riskTier: T3-sensitive         # T1-low | T2-medium | T3-sensitive | T4-autonomous
+dataClassification: sensitive  # public | internal | sensitive
+
+# Tools que o agente pode invocar.
+# Vazio = sem check de compliance (todas permitidas).
+# Se preenchido, tool fora da lista gera finding TOOL_NOT_ALLOWED.
+allowedTools: []
+
+runtime:
+  telemetry:
+    otelEndpoint: https://d3eaaghzw7ojx8.cloudfront.net/api/telemetry/v1/traces
+    serviceAccountId: <CLIENT_ID_DO_SERVICE_ACCOUNT>
