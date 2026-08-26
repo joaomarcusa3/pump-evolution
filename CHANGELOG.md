@@ -7,6 +7,29 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-08-26
+
+### Fixed
+
+- **Tokens em respostas de streaming (Python)**: `converse_stream` e
+  `invoke_model_with_response_stream` emitiam o span SEM `gen_ai.usage.*`, e
+  portanto sem custo. O span era finalizado no retorno da chamada, mas o retorno
+  imediato de `converse_stream` traz apenas o campo `stream` — o `usage` chega no
+  evento `metadata`, no fim. O campo iteravel passa a ser envolvido por um
+  observador que repassa cada evento inalterado e finaliza o span depois do
+  consumo, com o `usage` observado. Restaura a paridade com `observeStream` do
+  TypeScript, que ja fazia isso. O span termina exatamente uma vez em qualquer
+  caminho: consumo completo, `break` antecipado (`GeneratorExit`) ou erro
+  genuino, re-levantado inalterado.
+
+  Impacto: agentes Python que usam streaming no Bedrock (por exemplo via
+  `astream` do LangChain) apareciam no portal com token e custo zerados.
+
+### Added
+
+- Suite de testes Python (`py/tests/`) — ate entao so o TypeScript tinha testes.
+
+
 ## [0.0.2] - 2026-08-19
 
 ### Fixed

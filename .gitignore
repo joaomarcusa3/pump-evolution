@@ -33,3 +33,9 @@ dist-zip/
 
 # api-extractor scratch
 temp/
+
+# Artefatos de build do pacote Python (pip install -e / build)
+py/build/
+py/dist/
+*.egg-info/
+.pytest_cache/
