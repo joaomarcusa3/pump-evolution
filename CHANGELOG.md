@@ -7,6 +7,8 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-08-26
+
 ### Fixed
 
 - **Tokens em respostas de streaming (Python)**: `converse_stream` e
