@@ -255,3 +255,185 @@ describe('instrumentMcpServer — auto-instrumentation (no manual wrapping)', ()
     expect(span!.attributes['gen_ai.tool.name']).toBe('buscar');
   });
 });
+
+// ─── instrumentMcpServer — low-level `Server` (setRequestHandler dispatch) ────
+
+type AnyFn = (...a: unknown[]) => unknown;
+
+/** Zod-v3-shaped request schema: `.shape.method._def.value`. */
+function schemaV3(method: string): unknown {
+  return { shape: { method: { _def: { value: method } } } };
+}
+
+/** Zod-v4-shaped request schema: `._zod.def.shape.method._zod.def.values[0]`. */
+function schemaV4(method: string): unknown {
+  return { _zod: { def: { shape: { method: { _zod: { def: { values: [method] } } } } } } };
+}
+
+function methodOf(schema: unknown): string | undefined {
+  const v3 = (schema as { shape?: { method?: { _def?: { value?: string } } } }).shape?.method?._def
+    ?.value;
+  if (typeof v3 === 'string') return v3;
+  const v4 = (
+    schema as {
+      _zod?: { def?: { shape?: { method?: { _zod?: { def?: { values?: string[] } } } } } };
+    }
+  )._zod?.def?.shape?.method?._zod?.def?.values?.[0];
+  return typeof v4 === 'string' ? v4 : undefined;
+}
+
+/**
+ * Minimal double for `@modelcontextprotocol/sdk`'s LOW-LEVEL `Server`: no
+ * `registerTool`/`tool` at all — every tool is dispatched through the single
+ * handler registered for `tools/call`.
+ */
+class FakeLowLevelServer {
+  readonly _requestHandlers = new Map<string, AnyFn>();
+  setRequestHandler(schema: unknown, handler: AnyFn): void {
+    this._requestHandlers.set(methodOf(schema) ?? 'unknown', handler);
+  }
+  dispatch(method: string, request: unknown): unknown {
+    return this._requestHandlers.get(method)!(request, {});
+  }
+}
+
+function callToolRequest(name: string, args?: unknown): unknown {
+  return { method: 'tools/call', params: { name, arguments: args } };
+}
+
+describe('instrumentMcpServer — low-level Server (setRequestHandler)', () => {
+  it('emits one governed span per dispatched tool, with name and input from the request', () => {
+    const { exporter, tracer } = setup();
+    const server = instrumentMcpServer(
+      { tracer, allowedTools: ['buscar'], security: { enabled: true } },
+      new FakeLowLevelServer(),
+    );
+
+    server.setRequestHandler(schemaV3('tools/call'), (req) => {
+      const { name } = (req as { params: { name: string } }).params;
+      return `ok:${name}`;
+    });
+    const result = server.dispatch('tools/call', callToolRequest('buscar', { q: 'x' }));
+
+    expect(result).toBe('ok:buscar');
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.attributes['gen_ai.operation.name']).toBe('execute_tool');
+    expect(span!.attributes['gen_ai.tool.name']).toBe('buscar');
+    expect(span!.attributes['cta.compliance.status']).toBe('compliant');
+  });
+
+  it('recognises a Zod-v4-shaped request schema too', () => {
+    const { exporter, tracer } = setup();
+    const server = instrumentMcpServer(
+      { tracer, allowedTools: ['buscar'], security: { enabled: true } },
+      new FakeLowLevelServer(),
+    );
+
+    server.setRequestHandler(schemaV4('tools/call'), () => 'done');
+    server.dispatch('tools/call', callToolRequest('buscar'));
+
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.attributes['gen_ai.tool.name']).toBe('buscar');
+  });
+
+  it('flags non_compliant and scans the arguments (secret → at_risk, redacted)', () => {
+    const { exporter, tracer } = setup();
+    const server = instrumentMcpServer(
+      { tracer, allowedTools: ['buscar'], security: { enabled: true } },
+      new FakeLowLevelServer(),
+    );
+
+    server.setRequestHandler(schemaV3('tools/call'), () => undefined);
+    server.dispatch('tools/call', callToolRequest('exec_shell', { token: 'AKIAIOSFODNN7EXAMPLE' }));
+
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.attributes['cta.compliance.status']).toBe('non_compliant');
+    expect(span!.attributes['cta.security.status']).toBe('at_risk');
+    expect(String(span!.attributes['cta.security.findings'])).not.toContain('AKIAIOSFODNN7EXAMPLE');
+  });
+
+  it('registers handlers for other methods untouched (no span, same function)', () => {
+    const { exporter, tracer } = setup();
+    const server = instrumentMcpServer(
+      { tracer, allowedTools: ['buscar'], security: { enabled: true } },
+      new FakeLowLevelServer(),
+    );
+
+    const listHandler: AnyFn = () => ({ tools: [] });
+    server.setRequestHandler(schemaV3('tools/list'), listHandler);
+
+    expect(server._requestHandlers.get('tools/list')).toBe(listHandler);
+    server.dispatch('tools/list', { method: 'tools/list' });
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it('falls back to the request itself when the schema is not introspectable', () => {
+    const { exporter, tracer } = setup();
+    const server = instrumentMcpServer(
+      { tracer, allowedTools: ['buscar'], security: { enabled: true } },
+      new FakeLowLevelServer(),
+    );
+
+    // Opaque schema — the dispatched method can only be known at call time.
+    server.setRequestHandler({}, (req) => (req as { method: string }).method);
+
+    expect(server.dispatch('unknown', { method: 'resources/read' })).toBe('resources/read');
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+
+    expect(server.dispatch('unknown', callToolRequest('buscar'))).toBe('tools/call');
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.attributes['gen_ai.tool.name']).toBe('buscar');
+  });
+
+  it('retrofits a tools/call handler that was registered BEFORE instrumentation', () => {
+    const { exporter, tracer } = setup();
+    const server = new FakeLowLevelServer();
+    server.setRequestHandler(schemaV3('tools/call'), () => 'late');
+
+    instrumentMcpServer({ tracer, allowedTools: ['buscar'], security: { enabled: true } }, server);
+    expect(server.dispatch('tools/call', callToolRequest('buscar'))).toBe('late');
+
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.attributes['gen_ai.tool.name']).toBe('buscar');
+  });
+
+  it('is idempotent — instrumenting twice still emits a single span per call', () => {
+    const { exporter, tracer } = setup();
+    const deps = { tracer, allowedTools: ['buscar'], security: { enabled: true } };
+    const server = instrumentMcpServer(deps, new FakeLowLevelServer());
+    instrumentMcpServer(deps, server);
+
+    server.setRequestHandler(schemaV3('tools/call'), () => 'ok');
+    server.dispatch('tools/call', callToolRequest('buscar'));
+
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+  });
+});
+
+// ─── instrumentMcpServer — fail loud on an unrecognised server ────────────────
+
+describe('instrumentMcpServer — fails loudly instead of silently doing nothing', () => {
+  it('throws when the server exposes no tool surface at all', () => {
+    const { tracer } = setup();
+    expect(() =>
+      instrumentMcpServer(
+        { tracer, allowedTools: ['buscar'], security: { enabled: true } },
+        { connect: () => undefined },
+      ),
+    ).toThrow(/no tool surface/i);
+  });
+
+  it('names both supported surfaces so the fix is obvious', () => {
+    const { tracer } = setup();
+    expect(() =>
+      instrumentMcpServer({ tracer, allowedTools: [], security: { enabled: false } }, {}),
+    ).toThrow(/registerTool[\s\S]*setRequestHandler/);
+  });
+
+  it('throws when given something that is not a server object', () => {
+    const { tracer } = setup();
+    expect(() =>
+      instrumentMcpServer({ tracer, allowedTools: [], security: { enabled: false } }, undefined),
+    ).toThrow(/expects an MCP server instance/i);
+  });
+});

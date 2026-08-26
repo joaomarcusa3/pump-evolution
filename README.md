@@ -85,21 +85,57 @@ await pump.shutdown();
 ## MCP
 
 Um MCP não tem modelo — a unidade observável é a chamada de tool. Use `kind: mcp` no
-manifesto e auto-instrumente o servidor antes de registrar as tools:
+manifesto e auto-instrumente o servidor antes de registrar as tools.
+
+O `@modelcontextprotocol/sdk` tem **duas classes de servidor**, com superfícies
+diferentes. `instrumentMcpServer` cobre as duas — mas por caminhos diferentes, e vale
+saber qual é o seu:
+
+| Classe                                | Como as tools são registradas                          | O que é embrulhado                            |
+| ------------------------------------- | ------------------------------------------------------ | --------------------------------------------- |
+| `McpServer` (`server/mcp.js`)         | `registerTool(name, config, handler)` / `tool(name, …)` | cada método de registro; um handler por tool  |
+| `Server` (`server/index.js`)          | `setRequestHandler(CallToolRequestSchema, handler)`     | o handler único de `tools/call`, que despacha |
 
 ```ts
+// Alto nível — McpServer
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const server = pump.instrumentMcpServer(new McpServer({ name: 'meu-mcp', version: '1.0.0' }));
 server.registerTool('buscar_licitacao', { inputSchema }, async (args) => run(args));
 // cada tool registrada emite um span execute_tool governado
+```
 
-// no handler HTTP do MCP:
+```ts
+// Baixo nível — Server (é o caso do cta-factory-mcp)
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const server = pump.instrumentMcpServer(
+  new Server({ name: 'meu-mcp', version: '1.0.0' }, { capabilities: { tools: {} } }),
+);
+server.setRequestHandler(CallToolRequestSchema, async (req) => run(req.params));
+// cada tool despachada por esse handler emite seu próprio span,
+// com nome e input vindos de req.params.name / req.params.arguments
+```
+
+```ts
+// no handler HTTP do MCP (vale para as duas classes):
 const r = await auth.runWithIdentity(req.headers.authorization, () =>
   transport.handleRequest(req, res, body),
 );
 if (!r.ok) sendUnauthorized(res, r.reason);
 ```
+
+Chame `instrumentMcpServer` logo após construir o servidor. Com `McpServer` a ordem é
+obrigatória — só tools registradas DEPOIS são embrulhadas. Com `Server` um handler de
+`tools/call` já registrado também é instrumentado, mas manter a ordem continua sendo o
+hábito seguro. Instrumentar duas vezes o mesmo servidor é no-op (não duplica span).
+
+**Servidor de formato desconhecido → erro, não silêncio.** Se o objeto não expõe nem
+`registerTool`/`tool` nem `setRequestHandler`, `instrumentMcpServer` **lança**. Nenhum
+span sairia dali e o processo continuaria logando telemetria ativa — é exatamente o
+tipo de falha silenciosa que o SDK não pode ter. Nesse caso, embrulhe cada handler na
+mão com `pump.traceMcpTool({ name, input }, fn)`.
 
 Para tools avulsas (fora do registro), use `pump.traceMcpTool({ name, input }, fn)`.
 Uma tool fora do `allowedTools` gera finding de compliance (`TOOL_NOT_ALLOWED`); um
@@ -181,7 +217,9 @@ invente nenhum dado do passo 2 — pergunte ao humano.
 6. Instrumentar:
    - Agente Bedrock: const bedrock = pump.instrumentBedrock(client)
    - MCP: const server = pump.instrumentMcpServer(mcpServer) — ANTES de
-     registrar qualquer tool.
+     registrar qualquer tool. Vale para as duas classes do SDK MCP:
+     McpServer (registerTool/tool) e Server (setRequestHandler). Servidor
+     de outro formato lança erro em vez de virar no-op.
 
 7. Por request, autenticar e propagar identidade numa chamada só:
    const r = await auth.runWithIdentity(req.headers.authorization, () => /* chamada real */);

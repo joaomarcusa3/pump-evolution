@@ -7,6 +7,38 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+### Fixed
+
+- **`instrumentMcpServer` era no-op silencioso na classe `Server` (baixo nível)**:
+  a função embrulhava apenas `registerTool` e `tool`, que existem só na classe
+  `McpServer` (alto nível) do `@modelcontextprotocol/sdk`. Um servidor construído
+  sobre a classe `Server` despacha tools por
+  `setRequestHandler(CallToolRequestSchema, …)` e não tem nenhum dos dois —
+  recebia o servidor de volta intacto e NUNCA emitia um span de tool. Agora o
+  handler de `tools/call` também é embrulhado, com nome e input tirados de
+  `params.name` / `params.arguments`; um handler já registrado antes da chamada é
+  instrumentado igual. Instrumentar o mesmo servidor duas vezes é no-op (sem span
+  duplicado).
+
+  Impacto: o `cta-factory-mcp` da plataforma usa a classe `Server`. Config,
+  credencial, endpoint e permissão IAM estavam corretos, o boot logava telemetria
+  ativa, e nenhum span de tool chegava ao portal. Nada falhava — typecheck, lint,
+  build e os testes com fakes passavam.
+
+- **Servidor de formato desconhecido agora falha alto**: se o objeto não expõe
+  nem `registerTool`/`tool` nem `setRequestHandler`, `instrumentMcpServer` lança
+  em vez de devolver o servidor intacto. Silêncio ali contraria o princípio de
+  zero fallbacks — nenhum span sairia e o processo continuaria se dizendo
+  instrumentado. O SDK desabilitado não é afetado: o handle no-op nem chega lá.
+
+### Added
+
+- Testes contra o `@modelcontextprotocol/sdk` REAL
+  (`tests/mcp-instrumentation.real-sdk.test.ts`) — cliente e servidor ligados por
+  transport in-memory, para as duas classes. Fake de servidor MCP não prova
+  instrumentação: era justamente por isso que a suíte passava com o bug. O SDK
+  MCP e o `zod` entram como devDependencies só para esses testes.
+
 ## [0.0.3] - 2026-08-26
 
 ### Fixed
