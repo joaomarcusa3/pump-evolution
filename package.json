@@ -1,6 +1,6 @@
 {
   "name": "@topaz-ia/pump-evolution",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Plug-and-play TypeScript/Node telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Zero internal cta-* dependencies.",
   "keywords": [
     "telemetry",
