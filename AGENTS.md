@@ -53,10 +53,19 @@ Ao mudar a API pública, atualize o relatório: `pnpm api:extract` e commite
 - SDK AWS via `aws-sdk-client-mock`; auth via par RSA em memória + JWKS mockado.
 - Cubra fail-closed e bordas. Falha de teste é sinal — nunca mascare.
 - **Instrumentação de terceiro se testa contra o SDK de verdade**, não contra um
-  duplo: `tests/mcp-instrumentation.real-sdk.test.ts` liga cliente e servidor MCP
+  duplo: `tests/mcp-instrumentation.real-sdk.test.ts` (TS) e
+  `py/tests/test_mcp_instrumentation.py` (Python) ligam cliente e servidor MCP
   reais por transport in-memory. Um fake só confirma o formato que você imaginou —
   foi assim que `instrumentMcpServer` passou meses sem instrumentar a classe
-  `Server`, com a suíte verde.
+  `Server`, com a suíte verde. No Python era pior: o wrapper renomeava toda tool
+  do FastMCP para `traced_handler` e destruía o `inputSchema`, e nenhum teste
+  existia para notar.
+- **As duas implementações são pareadas.** Corrigiu comportamento no TS, verifique
+  o Python (e vice-versa) — os dois têm portão próprio no CI (`quality` e
+  `quality-python`). Assinatura de terceiro pode divergir entre as linguagens e
+  entre majors: o `mcp` renomeou `FastMCP` → `MCPServer` e trocou `call_tool` por
+  `add_request_handler` na 2.x. Prefira busca estrutural por nome de método a
+  importar o pacote.
 
 ## Fluxo
 
