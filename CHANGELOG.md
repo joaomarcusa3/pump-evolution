@@ -16,12 +16,43 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 > `SDK_USER_AGENT` respondem `0.0.4` nas duas, então **não há como distinguir uma
 > da outra sem ler o código**.
 >
-> Se você integrou com qualquer versão até a 0.0.4, **baixe a 0.0.5**. Vale
-> especialmente para conector MCP em Python: em tudo que veio antes desta versão,
-> `instrument_mcp_server` renomeava as tools do FastMCP para `traced_handler` —
-> o sintoma é o `tools/list` do seu servidor responder com uma tool só, com esse
-> nome. A partir da 0.0.5 o `publish-s3` recusa republicar uma versão existente,
-> então isso não se repete.
+> Se você integrou com qualquer versão até a 0.0.4, **baixe a 0.0.5**. A partir
+> desta versão o `publish-s3` recusa republicar uma versão existente, então a
+> ambiguidade não se repete.
+
+### Quem precisa agir
+
+**Conector MCP em Python que chama `instrument_mcp_server`.** Em toda versão até
+a 0.0.4 esse caminho não deixava o servidor sem telemetria — deixava o servidor
+**inoperante**. As tools eram registradas com o nome errado e com um schema que
+torna a chamada impossível:
+
+```
+tools registradas : ['traced_handler']
+
+ToolError: Error executing tool traced_handler: 2 validation errors
+  call_args    Field required
+  call_kwargs  Field required
+```
+
+O sintoma é inconfundível: o `tools/list` responde com uma tool só, chamada
+`traced_handler`, e **toda chamada de tool falha** com erro de validação do
+pydantic. Se o seu conector responde e executa tools normalmente, ele não passou
+por aqui e não há nada a fazer.
+
+**Quem NÃO precisa agir:** conector já em produção enviando telemetria. Nada
+neste release altera código deployado — o SDK é vendorizado no build de cada
+componente, não baixado em runtime. A atualização só acontece quando você
+decide refazer o build.
+
+### Ao atualizar para a 0.0.5
+
+Mudança de comportamento a conhecer: `instrument_mcp_server` (nas duas
+linguagens) agora **lança** quando o servidor não expõe nenhuma superfície de
+tool reconhecida, em vez de devolvê-lo intacto. Antes esse caminho jamais emitia
+um span enquanto o processo se dizia instrumentado. Se o seu servidor tem formato
+próprio, embrulhe cada handler com `trace_mcp_tool` / `traceMcpTool` em vez de
+contar com a instrumentação automática.
 
 ### Fixed
 
