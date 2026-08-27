@@ -7,6 +7,8 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-08-27
+
 ### Fixed
 
 - **`instrumentMcpServer` era no-op silencioso na classe `Server` (baixo nível)**:
