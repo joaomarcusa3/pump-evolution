@@ -382,10 +382,16 @@ export interface PumpHandle {
   traceMcpTool<T>(invocation: McpToolInvocation, fn: () => T): T;
   /**
    * Auto-instruments an MCP server (`@modelcontextprotocol/sdk`) in place so
-   * every tool it registers is governed automatically — no per-handler
+   * every tool call it serves is governed automatically — no per-handler
    * `traceMcpTool` wrapping. Returns the same server. Call it right after
    * constructing the server and BEFORE registering tools. When the SDK is
    * disabled, returns the server untouched.
+   *
+   * Covers BOTH server classes the MCP SDK ships: `McpServer` (high level —
+   * `registerTool` / `tool` are wrapped) and `Server` (low level — the
+   * `tools/call` handler registered via `setRequestHandler` is wrapped). A
+   * server exposing neither surface THROWS: no span would ever be emitted, and
+   * failing silently there is what this API must never do.
    *
    * Typed structurally (`S`) to avoid a hard dependency on the MCP SDK types.
    */

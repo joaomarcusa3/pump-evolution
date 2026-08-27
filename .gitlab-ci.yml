@@ -24,6 +24,7 @@ default:
     when: runner_system_failure
 
 stages:
+  - quality
   - build
   - package
   - publish
@@ -35,6 +36,28 @@ variables:
   PNPM_VERSION: '9.12.3'
   BUCKET: topaz-tooling-deploy-artifacts-029765331397
   AWS_REGION: us-east-1
+
+# ── Portões de qualidade ─────────────────────────────────────────────────────
+#
+# Até aqui a pipeline só compilava: install, build, pack. Build verde não é
+# sinal de que o SDK funciona — `instrumentMcpServer` passou meses devolvendo o
+# servidor intacto para a classe `Server` do MCP, sem emitir um único span, com
+# typecheck, lint e build todos passando. Quem pegava isso era a suíte, e a
+# suíte nunca rodou aqui: repare que os jobs de build levavam ~25s, tempo que
+# não dá para 214 testes.
+#
+# Roda ANTES do build de propósito — falhar em um minuto custa menos que
+# empacotar e publicar um artefato quebrado para os integradores.
+quality:
+  stage: quality
+  image: node:20-bookworm
+  script:
+    - corepack enable
+    - corepack prepare pnpm@${PNPM_VERSION} --activate
+    - pnpm install --frozen-lockfile
+    - pnpm run typecheck
+    - pnpm run lint
+    - pnpm test
 
 # ── Compila o TypeScript e gera o tarball npm ────────────────────────────────
 build-tarball:
