@@ -117,6 +117,59 @@ Primitiva de baixo nível: `pump.withUser({ userId, department }, fn)` — quand
 identidade não vem de um JWT. Sem identidade, o span recebe `cta.identity.anonymous=true`
 (nunca inventa usuário).
 
+## Runtime gerenciado (opcional — rodar no AgentCore de PRD da plataforma)
+
+Alternativa opt-in ao "runtime próprio + só telemetria": em vez de rodar o agente na
+sua conta/cloud, você o **hospeda no runtime AgentCore de PRD da plataforma** (conta de
+tooling) e apenas **invoca** por HTTPS + OAuth. O "cérebro" (prompt + modelo + tools) e
+o **catálogo de modelos** são da plataforma. Funciona de **qualquer conta AWS, region ou
+cloud** — não precisa de credencial AWS no seu lado, só o par client-credentials do
+Cognito (o mesmo tipo de credencial da telemetria, com o scope de invoke).
+
+No registro do agente (Factory/portal) você escolhe essa opção e recebe: `agentId`,
+endpoint de invoke e a credencial de invoke (client_id + client_secret show-once).
+
+```ts
+import { ManagedAgentClient } from '@topaz-ia/pump-evolution';
+
+// Monte a partir do env (recomendado) — ver variáveis abaixo:
+const agent = ManagedAgentClient.fromEnv();
+
+// Ou explicitamente a partir da base do CTA + agentId:
+// const agent = ManagedAgentClient.forAgent({
+//   baseUrl: 'https://<cta>',
+//   agentId: '<agentId>',
+//   serviceAccount: { clientId, clientSecret, tokenUrl },
+// });
+
+// userToken = JWT do usuário final (Cognito), propagado p/ atribuição de custo/departamento
+const r = await agent.invoke({
+  message: 'Analise este contrato...',
+  userToken: req.headers.authorization,
+});
+console.log(r.reply); // resposta gerada no runtime da plataforma
+```
+
+Variáveis de ambiente para `fromEnv()`:
+
+| Variável                        | Descrição                                                        |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `PUMP_MANAGED_AGENT_ENDPOINT`   | URL de invoke (`https://<cta>/api/agents/<agentId>/invoke`)      |
+| `PUMP_MANAGED_AGENT_ID`         | id do agente no registro do CTA (deriva o scope de invoke)       |
+| `PUMP_MANAGED_CLIENT_ID`        | client_id do service account de invoke                           |
+| `PUMP_MANAGED_CLIENT_SECRET`    | client_secret (nunca no código/manifesto)                        |
+| `PUMP_MANAGED_TOKEN_URL`        | endpoint OAuth do Cognito (`.../oauth2/token`)                   |
+| `PUMP_MANAGED_INVOKE_SCOPE`     | opcional — default `cta-consumers/invoke:agent:<agentId>`        |
+
+> **Diferença de comportamento vs. telemetria:** `invoke` é a chamada **real** do seu
+> agente — não é telemetria. Por isso ele **lança** `ManagedAgentInvokeError` em falha
+> (HTTP não-2xx, rede, corpo inválido), com `status` e `body` para você tratar. Não há
+> fallback silencioso. Trate o erro no seu fluxo.
+>
+> **Limite do catálogo:** o agente só usa os modelos disponíveis na conta da plataforma.
+> Se o modelo pedido não estiver no catálogo, isso é resolvido no registro (falha
+> explícita), não em runtime.
+
 ## Comportamento
 
 - Sem `PUMP_EVOLUTION_ENABLED=true`, o SDK é no-op total (zero overhead).

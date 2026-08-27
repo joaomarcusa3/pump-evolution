@@ -50,6 +50,9 @@ export interface BedrockInstrumentationDeps {
 }
 
 // @public
+export function buildAgentInvokeScope(agentId: string): string;
+
+// @public
 export function buildResource(attributes: ResourceAttributes): Resource;
 
 // @public
@@ -395,6 +398,72 @@ export function loadManifest(source: string | AgentManifest): AgentManifest;
 
 // @public
 export function loadResourceAttributes(source: string | AgentManifest): ResourceAttributes;
+
+// @public
+export class ManagedAgentClient {
+    constructor(config: ManagedAgentClientConfig);
+    static forAgent(config: {
+        baseUrl: string;
+        agentId: string;
+        serviceAccount: ManagedAgentServiceAccount;
+        fetchImpl?: FetchLike;
+    }): ManagedAgentClient;
+    static fromEnv(env?: Record<string, string | undefined>): ManagedAgentClient;
+    invoke(invocation: ManagedAgentInvocation): Promise<ManagedAgentResult>;
+}
+
+// @public
+export interface ManagedAgentClientConfig {
+    readonly agentId: string;
+    readonly endpoint: string;
+    readonly fetchImpl?: FetchLike;
+    readonly serviceAccount: ManagedAgentServiceAccount;
+}
+
+// @public
+export interface ManagedAgentInvocation {
+    readonly message: string;
+    readonly sessionId?: string;
+    readonly userToken?: string;
+}
+
+// @public
+export class ManagedAgentInvokeError extends Error {
+    constructor(message: string, options?: {
+        status?: number;
+        body?: unknown;
+    });
+    // (undocumented)
+    readonly body: unknown;
+    // (undocumented)
+    readonly status: number | undefined;
+}
+
+// @public
+export interface ManagedAgentResult {
+    // (undocumented)
+    readonly correlationId?: string;
+    // (undocumented)
+    readonly costUsd?: number;
+    // (undocumented)
+    readonly inputTokens?: number;
+    // (undocumented)
+    readonly latencyMs?: number;
+    // (undocumented)
+    readonly outputTokens?: number;
+    readonly raw: Record<string, unknown>;
+    readonly reply: string;
+    // (undocumented)
+    readonly sessionId?: string;
+}
+
+// @public
+export interface ManagedAgentServiceAccount {
+    readonly clientId: string;
+    readonly clientSecret: string;
+    readonly scope?: string;
+    readonly tokenUrl: string;
+}
 
 // @public
 export interface ManifestOwner {

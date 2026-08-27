@@ -49,6 +49,24 @@ Adiciona observabilidade governada a um agente ou MCP **sem alterar a resposta**
 `runWithIdentity` valida o Bearer do Cognito e preenche `enduser.id`/`cta.department`
 nos spans — sem passar `user-id` na mão. `r.user` diz quem é o usuário.
 
+## Runtime gerenciado (opcional)
+
+Se, no registro, o dev optar por **rodar no runtime AgentCore de PRD da plataforma** (em
+vez de runtime próprio + só telemetria): use `ManagedAgentClient` para invocar por
+HTTPS+OAuth — o modelo e o "cérebro" são da plataforma; funciona de qualquer
+conta/region/cloud (sem credencial AWS no lado do dev).
+
+```ts
+import { ManagedAgentClient } from '@topaz-ia/pump-evolution';
+const agent = ManagedAgentClient.fromEnv(); // PUMP_MANAGED_* no ambiente
+const r = await agent.invoke({ message, userToken: req.headers.authorization });
+```
+
+`invoke` **lança** `ManagedAgentInvokeError` em falha (é a chamada real do agente, não
+telemetria — sem fallback silencioso). Variáveis: `PUMP_MANAGED_AGENT_ENDPOINT`,
+`PUMP_MANAGED_AGENT_ID`, `PUMP_MANAGED_CLIENT_ID`, `PUMP_MANAGED_CLIENT_SECRET`,
+`PUMP_MANAGED_TOKEN_URL`.
+
 ## Regras
 
 - Ligue com `PUMP_EVOLUTION_ENABLED=true` (senão é no-op total).

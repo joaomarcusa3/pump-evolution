@@ -78,6 +78,17 @@ export {
 export type { SecurityEvaluationInput } from './security-checker.js';
 export { ServiceAccountTokenProvider, DEFAULT_TELEMETRY_SCOPE } from './token-provider.js';
 export type { FetchLike, ServiceAccountTokenProviderDeps } from './token-provider.js';
+export {
+  buildAgentInvokeScope,
+  ManagedAgentClient,
+  ManagedAgentInvokeError,
+} from './managed-agent-client.js';
+export type {
+  ManagedAgentClientConfig,
+  ManagedAgentInvocation,
+  ManagedAgentResult,
+  ManagedAgentServiceAccount,
+} from './managed-agent-client.js';
 export { backoffDelayMs, CircuitBreaker, withRetry } from './resilience.js';
 export type { CircuitBreakerOptions, CircuitState, RetryOptions } from './resilience.js';
 export { createOtlpBatchProcessor, ResilientAuthSpanExporter } from './otlp-exporter.js';
