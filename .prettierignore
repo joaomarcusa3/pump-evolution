@@ -6,3 +6,7 @@ coverage
 
 # Fixture de YAML inválido — proposital, não formatável
 tests/fixtures/manifest-malformed.yaml
+
+# Relatório de API — o formato é do api-extractor, não do prettier.
+# Reformatar aqui deixa `api:check` vermelho para sempre, mesmo com o conteúdo certo.
+etc/
