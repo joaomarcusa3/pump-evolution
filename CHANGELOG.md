@@ -7,6 +7,22 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-08-27
+
+> ⚠️ **Não confie no número 0.0.4.** Ele foi publicado duas vezes, com conteúdos
+> diferentes — a primeira com a correção do MCP no TypeScript, a segunda também
+> com a do Python. A 0.0.3 passou pela mesma coisa. Nos três casos o merge entrou
+> em `main` sem bump e a chave versionada no S3 foi sobrescrita. `__version__` e
+> `SDK_USER_AGENT` respondem `0.0.4` nas duas, então **não há como distinguir uma
+> da outra sem ler o código**.
+>
+> Se você integrou com qualquer versão até a 0.0.4, **baixe a 0.0.5**. Vale
+> especialmente para conector MCP em Python: em tudo que veio antes desta versão,
+> `instrument_mcp_server` renomeava as tools do FastMCP para `traced_handler` —
+> o sintoma é o `tools/list` do seu servidor responder com uma tool só, com esse
+> nome. A partir da 0.0.5 o `publish-s3` recusa republicar uma versão existente,
+> então isso não se repete.
+
 ### Fixed
 
 - **`instrument_mcp_server` (Python) QUEBRAVA o servidor FastMCP**, não apenas
