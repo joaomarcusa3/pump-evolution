@@ -88,6 +88,13 @@ build-tarball:
     # typescript 5.9.3 onde o package.json pede ^5.6.3.
     - pnpm install --frozen-lockfile
     - pnpm run build
+    # Confere a superfície pública contra etc/pump-evolution.api.md e falha se
+    # divergir. O relatório existe para que mudança de contrato apareça no diff
+    # da MR — mas ficou 56 exports atrás porque nenhum job o executava, e o
+    # `api:check` do package.json refaz o build inteiro só para chegar aqui.
+    # Rodando o extractor direto, aproveita o dist que a linha acima gerou.
+    # Divergiu? `pnpm api:extract` e commite o etc/.
+    - npx api-extractor run
     - npm pack
   artifacts:
     paths:
