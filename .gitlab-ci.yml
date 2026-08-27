@@ -175,7 +175,19 @@ publish-s3:
       # uma sessao de diagnostico depois.
       #
       # Falhar aqui e barato: bumpe a versao e mergeie de novo.
-      if aws s3api head-object --bucket "${BUCKET}" --key "${CHAVE}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+      #
+      # Sao TRES respostas possiveis do head-object, e a primeira versao deste
+      # guard colapsava as tres em `if ... >/dev/null 2>&1`. Resultado: qualquer
+      # erro -- inclusive 403 por a credencial de CI nao ter GetObject -- era
+      # lido como "a chave nao existe", e o guard publicava por cima em silencio.
+      # Foi o que aconteceu no merge de 24c4dbe: nem uma linha sobre a
+      # verificacao no log, e a 0.0.5 sobrescrita. Um portao que degrada em
+      # silencio nao e portao.
+      SAIDA_HEAD=$(aws s3api head-object --bucket "${BUCKET}" --key "${CHAVE}" --region "${AWS_REGION}" 2>&1) && CODIGO_HEAD=0 || CODIGO_HEAD=$?
+
+      if [ "${CODIGO_HEAD}" -eq 0 ]; then
+        # 1) A chave existe. Republicar trocaria o conteudo de uma versao ja
+        #    entregue aos integradores.
         if [ "${REPUBLICAR:-false}" != "true" ]; then
           echo "ERRO: ${CHAVE} ja existe no bucket."
           echo "Republicar sobrescreveria um artefato publicado com outro conteudo."
@@ -185,6 +197,21 @@ publish-s3:
           exit 1
         fi
         echo "AVISO: ${CHAVE} ja existia e sera sobrescrita (REPUBLICAR=true)."
+      elif echo "${SAIDA_HEAD}" | grep -qiE '(^|[^0-9])404([^0-9]|$)|Not Found'; then
+        # 2) Nao existe. E o caso normal de uma versao nova.
+        echo "Chave ${CHAVE} ainda nao existe no bucket -- publicando."
+      else
+        # 3) Nao deu para verificar. Sem saber, nao da para proteger nada, entao
+        #    parar e mostrar o erro cru da AWS e melhor que publicar no escuro.
+        #    Se for AccessDenied, a correcao e dar s3:GetObject ao usuario de CI
+        #    no prefixo sdk/* -- e nao afrouxar esta checagem.
+        echo "ERRO: nao foi possivel verificar se ${CHAVE} ja existe (exit ${CODIGO_HEAD})."
+        echo "Resposta da AWS:"
+        echo "${SAIDA_HEAD}"
+        echo
+        echo "Sem conseguir ler a chave, o guard nao consegue impedir a sobrescrita."
+        echo "Se for AccessDenied: conceda s3:GetObject em ${BUCKET}/sdk/* ao usuario de CI."
+        exit 1
       fi
 
       aws s3 cp "$ZIP" "s3://${BUCKET}/${CHAVE}" --region "${AWS_REGION}"
