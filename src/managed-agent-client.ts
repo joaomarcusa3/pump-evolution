@@ -1,6 +1,6 @@
 /**
  * managed-agent-client — cliente para **invocar um agente hospedado no runtime
- * AgentCore gerenciado da plataforma** (ADR-0068, "hospedagem opcional").
+ * AgentCore gerenciado da plataforma** ("hospedagem opcional").
  *
  * Diferente do resto do SDK, esta é uma capacidade **ativa** (não observacional):
  * o agente do desenvolvedor deixa de rodar um runtime próprio e passa a **chamar**
@@ -155,7 +155,7 @@ function requireNonEmpty(value: string, field: string): string {
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 /**
- * Cliente de invocação de um agente hospedado no runtime gerenciado (ADR-0068).
+ * Cliente de invocação de um agente hospedado no runtime gerenciado.
  *
  * ```ts
  * const agent = ManagedAgentClient.fromEnv();
