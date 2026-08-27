@@ -273,7 +273,9 @@ def claims_to_user_context(claims: Dict[str, Any]) -> UserContext:
     department = _read_string(claims.get("custom:department")) or _resolve_directorate_as_department(
         claims
     )
-    cost_center = _read_string(claims.get("custom:costCenter")) or _read_string(
-        claims.get("custom:cost_center")
+    cost_center = (
+        _read_string(claims.get("custom:costCenter"))
+        or _read_string(claims.get("custom:cost_center"))
+        or _read_string(claims.get("custom:cta_cost_center"))
     )
     return UserContext(user_id=user_id, department=department, cost_center=cost_center)
