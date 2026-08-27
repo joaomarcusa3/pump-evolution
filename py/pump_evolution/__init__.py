@@ -93,6 +93,12 @@ from .mcp_instrumentation import (
     trace_mcp_tool,
 )
 from .chat_recorder import OPERACAO_CHAT, record_chat
+from .managed_agent_client import (
+    ManagedAgentClient,
+    ManagedAgentInvokeError,
+    ManagedAgentResult,
+    build_agent_invoke_scope,
+)
 from .core import PumpEvolution, PumpInitInternals, init
 from .types import (
     AgentManifest,
@@ -187,6 +193,11 @@ __all__ = [
     "ServiceAccountTokenProvider",
     "DEFAULT_TELEMETRY_SCOPE",
     "FetchResponse",
+    # managed runtime (invocação do runtime gerenciado)
+    "ManagedAgentClient",
+    "ManagedAgentInvokeError",
+    "ManagedAgentResult",
+    "build_agent_invoke_scope",
     "create_otlp_batch_processor",
     "ResilientAuthSpanExporter",
     "TelemetryLogger",
