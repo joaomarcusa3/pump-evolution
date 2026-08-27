@@ -87,6 +87,15 @@ def versao_do_pyproject() -> str:
     return achado.group(1)
 
 
+def versao_do_dunder() -> str | None:
+    """O `__version__` do pacote Python e o que o integrador le em runtime
+    (`pump_evolution.__version__`). Ficou de fora deste check ate 27/08/2026 e
+    podia divergir em silencio dos outros tres."""
+    texto = (RAIZ / "py" / "pump_evolution" / "__init__.py").read_text(encoding="utf-8")
+    achado = re.search(r'^__version__\s*=\s*"([^"]+)"', texto, re.M)
+    return achado.group(1) if achado else None
+
+
 def versao_do_user_agent() -> str | None:
     """O SDK_USER_AGENT viaja em todo request ao receiver. Se ele mentir a
     versao, o diagnostico de producao aponta para o codigo errado."""
@@ -96,12 +105,16 @@ def versao_do_user_agent() -> str | None:
 
 
 def conferir_versoes() -> str:
-    pkg, py, ua = versao_do_package(), versao_do_pyproject(), versao_do_user_agent()
-    print(f"  package.json      {pkg}")
-    print(f"  py/pyproject.toml {py}")
-    print(f"  SDK_USER_AGENT    {ua or '(nao encontrado)'}")
+    pkg = versao_do_package()
+    py = versao_do_pyproject()
+    dunder = versao_do_dunder()
+    ua = versao_do_user_agent()
+    print(f"  package.json                   {pkg}")
+    print(f"  py/pyproject.toml              {py}")
+    print(f"  py/pump_evolution/__init__.py  {dunder or '(nao encontrado)'}")
+    print(f"  SDK_USER_AGENT                 {ua or '(nao encontrado)'}")
 
-    divergentes = {v for v in (pkg, py, ua) if v is not None}
+    divergentes = {v for v in (pkg, py, dunder, ua) if v is not None}
     if len(divergentes) > 1:
         erro(
             "as versoes declaradas nao batem entre si. Publicar assim gera um "

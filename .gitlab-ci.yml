@@ -157,9 +157,31 @@ publish-s3:
       echo "Identidade do runner: $(aws sts get-caller-identity --query Arn --output text)"
 
       ZIP=dist-zip/pump-evolution-latest.zip
+      CHAVE="sdk/pump-evolution-${VERSAO}.zip"
 
-      aws s3 cp "$ZIP" "s3://${BUCKET}/sdk/pump-evolution-${VERSAO}.zip" --region "${AWS_REGION}"
-      echo "Publicado: sdk/pump-evolution-${VERSAO}.zip"
+      # A chave versionada existe para dar rastreabilidade e rollback -- e nao da
+      # nenhuma das duas se o mesmo numero nomear dois conteudos. Aconteceu duas
+      # vezes em dois dias: a 0.0.3 foi republicada com a correcao do MCP no
+      # TypeScript, e a 0.0.4 com a do Python, ambas por merge sem bump. Nada se
+      # perdeu (o bucket tem versionamento), mas "qual 0.0.4 esta neste vendor?"
+      # virou pergunta sem resposta -- exatamente o tipo de ambiguidade que custa
+      # uma sessao de diagnostico depois.
+      #
+      # Falhar aqui e barato: bumpe a versao e mergeie de novo.
+      if aws s3api head-object --bucket "${BUCKET}" --key "${CHAVE}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+        if [ "${REPUBLICAR:-false}" != "true" ]; then
+          echo "ERRO: ${CHAVE} ja existe no bucket."
+          echo "Republicar sobrescreveria um artefato publicado com outro conteudo."
+          echo "Bumpe a versao (package.json, py/pyproject.toml, py/pump_evolution/__init__.py"
+          echo "e o SDK_USER_AGENT em src/otlp-exporter.ts) e mergeie de novo."
+          echo "Se a republicacao for mesmo intencional, rode a pipeline com REPUBLICAR=true."
+          exit 1
+        fi
+        echo "AVISO: ${CHAVE} ja existia e sera sobrescrita (REPUBLICAR=true)."
+      fi
+
+      aws s3 cp "$ZIP" "s3://${BUCKET}/${CHAVE}" --region "${AWS_REGION}"
+      echo "Publicado: ${CHAVE}"
 
       # A latest sai por PADRAO. O merge em main E a decisao de publicar -- exigir
       # um interruptor a mais so criava um jeito silencioso de a latest ficar
