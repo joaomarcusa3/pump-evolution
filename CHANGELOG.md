@@ -7,6 +7,24 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-08-27
+
+### Fixed
+
+- **O guard contra republicação não guardava nada.** Introduzido na 0.0.5, ele
+  colapsava as três respostas possíveis do `head-object` num único
+  `if ... >/dev/null 2>&1`, então qualquer erro — inclusive `AccessDenied` por a
+  credencial de CI não ter `s3:GetObject` — era lido como "a chave não existe" e
+  a publicação seguia por cima. Foi exatamente o que aconteceu: o merge seguinte
+  sobrescreveu `sdk/pump-evolution-0.0.5.zip` sem uma linha no log sobre a
+  verificação.
+
+  Os três casos passam a ser distintos: chave existente bloqueia; `404` publica;
+  **qualquer outra falha para a pipeline e mostra a resposta crua da AWS**, em vez
+  de publicar no escuro. Um portão que degrada em silêncio não é portão — foi a
+  lição que o `instrumentMcpServer` deu neste mesmo release, repetida por descuido
+  no shell.
+
 ## [0.0.5] - 2026-08-27
 
 > ⚠️ **Não confie no número 0.0.4.** Ele foi publicado duas vezes, com conteúdos
