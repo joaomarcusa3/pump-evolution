@@ -100,6 +100,23 @@ export interface AgentManifest {
   readonly runtime?: ManifestRuntime;
 }
 
+// ─── Diagnostics ──────────────────────────────────────────────────────────────
+
+/**
+ * Minimal, injectable diagnostic logger. By default the SDK degrades **silently**
+ * (the steering forbids `console.*`), which means export failures — an invalid
+ * or expired service-account credential (401), a missing scope (403), a network
+ * error or a 5xx — are lost with no trace. Provide a `logger` in {@link PumpConfig}
+ * to surface those instead of losing them.
+ *
+ * PRIVACY: the SDK only ever passes rule labels, endpoints, HTTP status and short
+ * error messages here — never secrets, tokens, prompts or PII.
+ */
+export interface TelemetryLogger {
+  warn?(message: string, meta?: Record<string, unknown>): void;
+  debug?(message: string, meta?: Record<string, unknown>): void;
+}
+
 // ─── SDK init configuration ──────────────────────────────────────────────────
 
 /**
@@ -151,6 +168,13 @@ export interface PumpConfig {
     /** Optional per-invocation token ceiling for the LLM10 (unbounded consumption) check. */
     readonly maxTotalTokens?: number;
   };
+  /**
+   * Optional diagnostic logger (see {@link TelemetryLogger}). When provided, the
+   * SDK reports export failures (auth 401/403, network, 5xx) instead of degrading
+   * silently — the single most useful signal when telemetry "isn't arriving".
+   * Omitted → truly silent (unchanged default). Never receives sensitive values.
+   */
+  readonly logger?: TelemetryLogger;
 }
 
 // ─── Resource attributes produced by the SDK ─────────────────────────────────
