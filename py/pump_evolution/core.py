@@ -169,6 +169,9 @@ def init(config: PumpConfig, internals: Optional[PumpInitInternals] = None) -> A
     if internals.span_processors is not None:
         span_processors: List[Any] = list(internals.span_processors)
     else:
+        # Logger de diagnóstico: `config.logger` público (devs externos), com o
+        # seam interno de teste tendo precedência. Ausente → exporter silencioso.
+        exporter_logger = internals.logger if internals.logger is not None else config.logger
         span_processors = [
             create_otlp_batch_processor(
                 endpoint=resolved.endpoint,
@@ -177,7 +180,7 @@ def init(config: PumpConfig, internals: Optional[PumpInitInternals] = None) -> A
                     client_id=resolved.service_account.client_id,
                     client_secret=resolved.service_account.client_secret,
                 ),
-                logger=internals.logger,
+                logger=exporter_logger,
             )
         ]
 

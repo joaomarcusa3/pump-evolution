@@ -13,6 +13,14 @@ O span emitido é o MESMO: `gen_ai.operation.name` (chat/text_completion),
 explícito `cta.usage.tokens_available=false`), finish reasons, spans
 `execute_tool` das tools, compliance + OWASP-security + identidade.
 
+Respostas de streaming (`converse_stream`, `invoke_model_with_response_stream`):
+o campo iterável da resposta é trocado por um observador que repassa cada evento
+inalterado e finaliza o span DEPOIS do consumo — o `usage` do Bedrock chega no
+evento `metadata`, no fim, e o retorno imediato de `converse_stream` traz apenas
+o campo `stream`. Paridade com `observeStream` do TS. O span termina exatamente
+uma vez em qualquer caminho: consumo completo, `break` antecipado (via
+`GeneratorExit`) ou erro genuíno, que é re-levantado inalterado.
+
 Invariantes: idempotente (flag no cliente); um erro REAL do Bedrock propaga
 inalterado; um bug da NOSSA telemetria é engolido (reportado via `on_error`) e a
 chamada original ainda retorna. Privacidade: input/output crus nunca viram
@@ -45,7 +53,12 @@ from .constants import (
 )
 from .identity_context import apply_identity_to_span
 from .security_checker import SecurityEvaluationInput, _Usage, apply_security_to_span, evaluate_security
-from .tool_tracer import ObservedToolUse, extract_tool_uses, record_tool_use_spans
+from .tool_tracer import (
+    ObservedToolUse,
+    extract_tool_use_from_stream_event,
+    extract_tool_uses,
+    record_tool_use_spans,
+)
 from .types import DataClassification
 
 # Flag de idempotência (marca um cliente já instrumentado).
@@ -119,6 +132,56 @@ def _read_finish_reasons(response: Any) -> List[str]:
         return []
     stop = response.get("stopReason")
     return [stop] if isinstance(stop, str) and len(stop) > 0 else []
+
+
+def _read_usage_from_event(event: Any) -> Optional[Dict[str, int]]:
+    """Usage de um evento de ConverseStream. Paridade com `readUsageFromEvent`.
+
+    O Bedrock entrega o usage no evento `metadata` do stream — nunca no retorno
+    imediato de `converse_stream`, cujo unico campo e `stream`. Tolera tambem o
+    formato mais raso `{usage: {...}}`.
+    """
+    if not _is_record(event):
+        return None
+    from_metadata = _read_usage(event.get("metadata"))
+    if from_metadata is not None:
+        return from_metadata
+    return _read_usage(event)
+
+
+def _read_stop_reason_from_event(event: Any) -> Optional[str]:
+    """stopReason de um evento `messageStop`. Paridade com `readStopReasonFromEvent`."""
+    if not _is_record(event):
+        return None
+    for candidato in (event.get("messageStop"), event):
+        reasons = _read_finish_reasons(candidato)
+        if reasons:
+            return reasons[0]
+    return None
+
+
+def _read_stream_delta_text(event: Any) -> Optional[str]:
+    """Texto de um evento `contentBlockDelta`. Paridade com `readStreamDeltaText`."""
+    if not _is_record(event):
+        return None
+    delta = event.get("contentBlockDelta")
+    delta = delta.get("delta") if _is_record(delta) else None
+    if not _is_record(delta):
+        return None
+    text = delta.get("text")
+    return text if isinstance(text, str) else None
+
+
+def _read_stream(response: Any, field: str) -> Optional[Any]:
+    """O iteravel de eventos da resposta (`stream` no Converse, `body` no
+    InvokeModel). None quando ausente ou nao-iteravel — nesse caso o wrapper cai
+    no caminho nao-streaming, sem inventar comportamento."""
+    if not _is_record(response):
+        return None
+    candidato = response.get(field)
+    if candidato is None or isinstance(candidato, (str, bytes)):
+        return None
+    return candidato if hasattr(candidato, "__iter__") else None
 
 
 def _extract_converse_input_text(kwargs: Dict[str, Any]) -> Optional[str]:
@@ -218,9 +281,24 @@ def _make_wrapper(original, operation, streaming, stream_field, deps, on_error):
         if span is None:
             return response
 
-        # Streaming: o span termina quando o agente consumir o stream (aqui, no
-        # boto3 não-async, finalizamos com o que já dá pra observar da resposta;
-        # a iteração do agente segue intacta). Bookkeeping guardado.
+        # Streaming: o span so pode ser finalizado DEPOIS que o agente consumir o
+        # stream — o `usage` do Bedrock chega no evento `metadata`, no fim. Aqui
+        # o campo iteravel e trocado por um observador que repassa cada evento
+        # inalterado e fecha o span ao terminar. Sem isso, todo span de
+        # `converse_stream` saia sem tokens (e portanto sem custo).
+        if streaming:
+            source = _read_stream(response, stream_field)
+            if source is not None:
+                try:
+                    response[stream_field] = _observe_stream(
+                        source, span, operation, kwargs, deps, on_error
+                    )
+                    return response
+                except Exception as e:
+                    # Nao conseguimos envolver (resposta imutavel, por ex.): cai
+                    # no caminho nao-streaming em vez de perder o span.
+                    on_error(e)
+
         try:
             _finalize_span(span, operation, kwargs, response, deps)
         except Exception as e:
@@ -234,9 +312,10 @@ def _make_wrapper(original, operation, streaming, stream_field, deps, on_error):
     return wrapper
 
 
-def _finalize_span(span, operation, kwargs, response, deps) -> None:
-    # Usage (ou marcador explícito de ausência — nunca fabrica 0).
-    usage = _read_usage(response)
+def _apply_usage(span, usage: Optional[Dict[str, int]]) -> None:
+    """Escreve o usage no span. Ausente → marca `tokens_available=False` e OMITE
+    os `gen_ai.usage.*`; nunca um 0 fabricado, que corromperia a agregacao de
+    custo downstream."""
     if usage is not None:
         span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, usage["inputTokens"])
         span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, usage["outputTokens"])
@@ -244,18 +323,11 @@ def _finalize_span(span, operation, kwargs, response, deps) -> None:
     else:
         span.set_attribute(CTA_USAGE_TOKENS_AVAILABLE, False)
 
-    finish = _read_finish_reasons(response)
-    if finish:
-        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, finish)
 
-    # Tools (spans execute_tool parenteados) + lista pra compliance.
-    tool_uses: List[ObservedToolUse] = (
-        extract_tool_uses(response) if operation == OPERATION_CHAT else []
-    )
+def _apply_tools_and_compliance(span, operation, tool_uses, deps) -> None:
+    """Spans `execute_tool` parenteados + avaliacao de compliance das tools."""
     if tool_uses:
         record_tool_use_spans(deps.tracer, tool_uses, parent=span)
-
-    # Compliance (quando configurada).
     if deps.compliance is not None:
         summary = evaluate_compliance(
             ComplianceEvaluationInput(
@@ -267,20 +339,144 @@ def _finalize_span(span, operation, kwargs, response, deps) -> None:
         )
         apply_compliance_to_span(span, summary)
 
-    # Segurança OWASP (quando configurada e não desabilitada).
-    if deps.security is not None and deps.security.enabled is not False:
-        u = None
-        if usage is not None:
-            u = _Usage(input_tokens=usage["inputTokens"], output_tokens=usage["outputTokens"])
-        sec = evaluate_security(
-            SecurityEvaluationInput(
-                user_input=_extract_converse_input_text(kwargs),
-                model_output=_extract_converse_output_text(response),
-                usage=u,
-                max_total_tokens=deps.security.max_total_tokens,
-            )
+
+def _apply_security(span, deps, user_input, model_output, usage) -> None:
+    """Scan OWASP LLM de runtime. No-op quando nao configurado ou desabilitado."""
+    if deps.security is None or deps.security.enabled is False:
+        return
+    u = None
+    if usage is not None:
+        u = _Usage(input_tokens=usage["inputTokens"], output_tokens=usage["outputTokens"])
+    sec = evaluate_security(
+        SecurityEvaluationInput(
+            user_input=user_input,
+            model_output=model_output,
+            usage=u,
+            max_total_tokens=deps.security.max_total_tokens,
         )
-        apply_security_to_span(span, sec)
+    )
+    apply_security_to_span(span, sec)
+
+
+def _finalize_span(span, operation, kwargs, response, deps) -> None:
+    """Finaliza o span de uma resposta NAO-streaming, onde tudo ja esta presente."""
+    usage = _read_usage(response)
+    _apply_usage(span, usage)
+
+    finish = _read_finish_reasons(response)
+    if finish:
+        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, finish)
+
+    tool_uses: List[ObservedToolUse] = (
+        extract_tool_uses(response) if operation == OPERATION_CHAT else []
+    )
+    _apply_tools_and_compliance(span, operation, tool_uses, deps)
+    _apply_security(
+        span,
+        deps,
+        _extract_converse_input_text(kwargs),
+        _extract_converse_output_text(response),
+        usage,
+    )
 
     span.set_status(Status(StatusCode.OK))
     span.end()
+
+
+# Teto de acumulacao de texto de saida para o scan de seguranca — evita segurar
+# uma resposta longa inteira em memoria so para escanear.
+_MAX_SCAN_CHARS = 20_000
+
+
+def _observe_stream(source, span, operation, kwargs, deps, on_error):
+    """Generator que repassa cada evento do stream e finaliza o span DEPOIS.
+
+    Paridade com `observeStream` do TS. Existe porque o retorno imediato de
+    `converse_stream` traz um unico campo (`stream`) — o `usage` so chega no
+    evento `metadata`, no fim. Finalizar o span na chamada, como era feito antes,
+    registrava identidade/modelo/latencia mas SEMPRE sem tokens, e portanto sem
+    custo: exatamente a metrica que a governanca existe para produzir.
+
+    Os eventos sao repassados inalterados; o consumidor nao percebe diferenca.
+
+    Tres caminhos, e o span termina EXATAMENTE UMA VEZ em todos:
+      - consumo ate o fim  → finaliza com o usage observado;
+      - `break` antecipado → o `close()` do generator dispara o `finally`,
+        finalizando com o que deu para observar (em vez de vazar o span);
+      - erro genuino       → marca ERROR e re-levanta o erro ORIGINAL inalterado.
+    """
+    usage: Optional[Dict[str, int]] = None
+    stop_reason: Optional[str] = None
+    tool_uses: List[ObservedToolUse] = []
+    partes: List[str] = []
+    chars = 0
+    estado = {"finalizado": False, "encerrado": False}
+
+    def finalizar_ok() -> None:
+        if estado["finalizado"]:
+            return
+        estado["finalizado"] = True
+        try:
+            _apply_usage(span, usage)
+            if stop_reason:
+                span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, [stop_reason])
+            if operation == OPERATION_CHAT:
+                _apply_tools_and_compliance(span, operation, tool_uses, deps)
+            _apply_security(
+                span,
+                deps,
+                _extract_converse_input_text(kwargs),
+                "".join(partes) if partes else None,
+                usage,
+            )
+            span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            on_error(e)
+
+    def encerrar_uma_vez() -> None:
+        if estado["encerrado"]:
+            return
+        estado["encerrado"] = True
+        try:
+            span.end()
+        except Exception as e:
+            on_error(e)
+
+    try:
+        for event in source:
+            try:
+                usage = _read_usage_from_event(event) or usage
+                stop_reason = _read_stop_reason_from_event(event) or stop_reason
+                if operation == OPERATION_CHAT:
+                    uso = extract_tool_use_from_stream_event(event)
+                    if uso is not None:
+                        tool_uses.append(uso)
+                    if deps.security is not None and chars < _MAX_SCAN_CHARS:
+                        delta = _read_stream_delta_text(event)
+                        if delta:
+                            partes.append(delta)
+                            chars += len(delta)
+            except Exception as e:
+                # Bug de bookkeeping nosso nunca corrompe o stream do agente.
+                on_error(e)
+            yield event
+        finalizar_ok()
+    except GeneratorExit:
+        # Consumidor abandonou o stream (`break`, ou `close()` explicito). NAO e
+        # erro: o Python levanta GeneratorExit no ponto do `yield`, e como ela
+        # herda de BaseException seria confundida com falha do stream. Aqui ela
+        # so propaga — o `finally` finaliza com o que deu para observar.
+        raise
+    except BaseException as erro:
+        # Erro genuino do stream: marca finalizado ANTES para que o `finally` nao
+        # sobrescreva o ERROR com OK, e re-levanta o erro original inalterado.
+        estado["finalizado"] = True
+        try:
+            span.record_exception(erro)
+            span.set_status(Status(StatusCode.ERROR))
+        except Exception as e:
+            on_error(e)
+        raise
+    finally:
+        finalizar_ok()
+        encerrar_uma_vez()

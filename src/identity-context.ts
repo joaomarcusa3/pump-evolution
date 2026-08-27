@@ -319,7 +319,9 @@ export function claimsToUserContext(claims: Record<string, unknown>): UserContex
   const department =
     readString(claims['custom:department']) ?? resolveDirectorateAsDepartment(claims);
   const costCenter =
-    readString(claims['custom:costCenter']) ?? readString(claims['custom:cost_center']);
+    readString(claims['custom:costCenter']) ??
+    readString(claims['custom:cost_center']) ??
+    readString(claims['custom:cta_cost_center']);
   return {
     ...(userId !== undefined ? { userId } : {}),
     ...(department !== undefined ? { department } : {}),

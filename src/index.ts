@@ -43,6 +43,8 @@ export { traceMcpTool, instrumentMcpServer } from './mcp-instrumentation.js';
 export type { McpToolTracerDeps } from './mcp-instrumentation.js';
 export { ConsumerTokenVerifier } from './consumer-auth.js';
 export type { ConsumerAuthConfig, ConsumerAuthResult, JwksFetchLike } from './consumer-auth.js';
+export { CognitoLogin } from './cognito-login.js';
+export type { CallbackResult, CognitoFetchLike, CognitoLoginConfig, Pkce } from './cognito-login.js';
 export { init, PumpEvolution } from './pump-evolution.js';
 export type { PumpInitInternals } from './pump-evolution.js';
 export {
