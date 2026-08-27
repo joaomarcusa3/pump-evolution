@@ -59,6 +59,23 @@ quality:
     - pnpm run lint
     - pnpm test
 
+# ── Portão de qualidade do lado Python ───────────────────────────────────────
+#
+# O SDK tem duas implementações, e só a de TypeScript tinha portão. O Python
+# repetiu o mesmo bug do MCP — e pior: `instrument_mcp_server` renomeava toda
+# tool do FastMCP para `traced_handler` e destruía o inputSchema. Quebrava o
+# servidor, não só a telemetria, e ninguém rodava a suíte que pegaria isso.
+#
+# Só `pytest`. `ruff` e `mypy` ficam de fora por ora: acusam 382 e 11 achados
+# pré-existentes, sem config no pyproject. Ligar os dois é trabalho próprio, e
+# fingir um portão verde escondendo isso com `|| true` seria pior que não ter.
+quality-python:
+  stage: quality
+  image: python:3.12-slim
+  script:
+    - pip install --no-cache-dir "./py[dev]"
+    - python -m pytest py/tests -q
+
 # ── Compila o TypeScript e gera o tarball npm ────────────────────────────────
 build-tarball:
   stage: build

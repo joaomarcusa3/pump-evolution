@@ -23,7 +23,16 @@ dependencies = [
 
 [project.optional-dependencies]
 bedrock = ["boto3>=1.34.0"]
-dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.5", "types-PyYAML>=6.0"]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.8",
+    "ruff>=0.5",
+    "types-PyYAML>=6.0",
+    # Os testes de instrumentacao MCP rodam contra o pacote real, nao um duplo.
+    # Marcador porque o `mcp` exige 3.10 e este pacote suporta 3.9 — la o teste
+    # se pula sozinho via `pytest.importorskip`.
+    "mcp>=1.20; python_version>='3.10'",
+]
 
 [project.urls]
 Homepage = "https://gitlab.topazevolution.com/topaz-ia/templates/sdk"

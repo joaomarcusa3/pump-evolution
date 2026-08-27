@@ -7,6 +7,46 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+### Fixed
+
+- **`instrument_mcp_server` (Python) QUEBRAVA o servidor FastMCP**, não apenas
+  deixava de instrumentá-lo. Ele procurava `register_tool`/`tool`/`add_tool` e
+  embrulhava o último argumento callable — mas em `add_tool(fn, name=None, ...)`
+  a função é o PRIMEIRO argumento. O wrapper cru `(*args, **kwargs)` substituía a
+  função original, e como o FastMCP tira o nome da tool de `fn.__name__` e o
+  `inputSchema` da assinatura, **toda tool passava a se chamar `traced_handler`
+  com schema `{call_args, call_kwargs}`**. Os dois caminhos de registro
+  (`@mcp.tool()` e `add_tool`) desembocavam nisso.
+
+  Agora a função é embrulhada com `functools.wraps`, preservando
+  `__name__`/`__doc__`/`__annotations__` e a assinatura via `__wrapped__` — nome,
+  descrição e schema saem intactos. Funções `async` mantêm o formato, que é o que
+  o FastMCP checa com `iscoroutinefunction`.
+
+- **O servidor de baixo nível não emitia span nenhum** — paridade com a correção
+  do TypeScript na 0.0.4. `mcp.server.lowlevel.Server` não tem `add_tool` nem
+  `tool`: despacha por `call_tool()` no `mcp` 1.x e por
+  `add_request_handler("tools/call", ...)` no 2.x. Os dois caminhos passam a ser
+  instrumentados, cada tool despachada vira um span próprio, e um despacho já
+  registrado antes da chamada é instrumentado também.
+
+- **Servidor de formato desconhecido agora falha alto**, como no TypeScript: sem
+  `add_tool`/`tool` nem `call_tool`/`add_request_handler`, `instrument_mcp_server`
+  lança em vez de devolver o servidor intacto. Instrumentar o mesmo servidor duas
+  vezes é no-op, e o caminho `tool()` → `add_tool()` do FastMCP não duplica span.
+
+### Added
+
+- **Testes de MCP no Python** (`py/tests/test_mcp_instrumentation.py`), contra o
+  pacote `mcp` REAL — o de baixo nível ponta a ponta (cliente ↔ streams em
+  memória ↔ servidor). Rodam nas duas majors: `FastMCP`/`MCPServer` e os dois
+  formatos de registro de baixo nível. 13 dos 14 falham no código anterior.
+
+- **Portão de qualidade do Python no CI** (`quality-python`). O SDK tem duas
+  implementações e só a de TypeScript tinha portão — a suíte Python nunca rodou
+  na pipeline. Só `pytest`: `ruff` e `mypy` acusam 382 e 11 achados
+  pré-existentes, sem config no `pyproject`, e ligá-los é trabalho próprio.
+
 ## [0.0.4] - 2026-08-27
 
 ### Fixed
