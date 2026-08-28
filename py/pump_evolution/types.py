@@ -18,7 +18,7 @@ Notas de mapeamento TS→Python:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Protocol, TypeVar
+from typing import Any, Dict, List, Literal, Optional, Protocol, Sequence, TypeVar
 
 # ─── Manifest (subset of the real AgentSpecProps) ────────────────────────────
 
@@ -58,12 +58,39 @@ class ManifestTelemetry:
 
 
 @dataclass(frozen=True)
+class ManifestCognito:
+    """Bloco de login de usuário final que a plataforma grava no manifesto ao
+    provisionar o App Client (`cta_factory_provisionar_cognito`).
+
+    É o login das PESSOAS que usam o componente — identidade distinta do
+    `ManifestTelemetry`, que autentica o processo. As duas nunca se cruzam:
+    telemetria é `client_credentials`, esta é `authorization_code` + PKCE.
+
+    Git-safe por construção: a plataforma nunca escreve o secret aqui. Um client
+    confidencial guarda o secret no cofre show-once do portal, e ele chega ao app
+    pelo ambiente.
+    """
+
+    domain: str
+    issuer: str
+    client_id: str
+    redirect_uri: str
+    scopes: str
+    identity_providers: Optional[Sequence[str]] = None
+    #: Só sai quando o pool tem EXATAMENTE UM federado — com dois ou mais,
+    #: adivinhar mandaria o usuário para o SSO errado. A ausência é informação.
+    identity_provider: Optional[str] = None
+    logout_redirect_uri: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ManifestRuntime:
     """Bloco external runtime (subconjunto do `ExternalRuntime` real). Só as
-    partes que o SDK precisa para resolver os defaults de telemetria."""
+    partes que o SDK precisa: defaults de telemetria e o login de usuário."""
 
     external: Optional[bool] = None
     telemetry: Optional[ManifestTelemetry] = None
+    cognito: Optional["ManifestCognito"] = None
 
 
 @dataclass(frozen=True)

@@ -33,6 +33,7 @@ from .types import (
     CTA_ITEM_KIND,
     AgentManifest,
     ManifestOwner,
+    ManifestCognito,
     ManifestRuntime,
     ManifestTelemetry,
     ResourceAttributes,
@@ -181,6 +182,55 @@ def _parse_telemetry(value: Any, origin: str) -> Optional[ManifestTelemetry]:
     return ManifestTelemetry(otel_endpoint=otel_endpoint, service_account_id=service_account_id)
 
 
+def _optional_string_list(value: Any, field: str, origin: str) -> Optional[list]:
+    """Lista opcional de strings não-vazias. Ausente e vazia querem dizer o
+    mesmo: nenhum IdP federado no pool."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        _fail(origin, f'field "{field}" must be an array when present, got {_describe_type(value)}.')
+    return [
+        _require_non_empty_string(item, f"{field}[{i}]", origin) for i, item in enumerate(value)
+    ]
+
+
+def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
+    """Bloco `runtime.cognito`, escrito pela plataforma ao provisionar o login.
+
+    Os cinco primeiros campos são OBRIGATÓRIOS quando o bloco existe. Um bloco
+    pela metade é pior que nenhum: o login falharia depois, no Hosted UI, com
+    mensagem opaca — em vez de aqui, no load, nomeando o campo. A plataforma
+    recusa emitir o bloco sem eles, então um parcial significa edição à mão.
+    """
+    if value is None:
+        return None
+    if not _is_record(value):
+        _fail(
+            origin,
+            f'field "runtime.cognito" must be an object when present, got {_describe_type(value)}.',
+        )
+    return ManifestCognito(
+        domain=_require_non_empty_string(value.get("domain"), "runtime.cognito.domain", origin),
+        issuer=_require_non_empty_string(value.get("issuer"), "runtime.cognito.issuer", origin),
+        client_id=_require_non_empty_string(
+            value.get("clientId"), "runtime.cognito.clientId", origin
+        ),
+        redirect_uri=_require_non_empty_string(
+            value.get("redirectUri"), "runtime.cognito.redirectUri", origin
+        ),
+        scopes=_require_non_empty_string(value.get("scopes"), "runtime.cognito.scopes", origin),
+        identity_providers=_optional_string_list(
+            value.get("identityProviders"), "runtime.cognito.identityProviders", origin
+        ),
+        identity_provider=_optional_non_empty_string(
+            value.get("identityProvider"), "runtime.cognito.identityProvider", origin
+        ),
+        logout_redirect_uri=_optional_non_empty_string(
+            value.get("logoutRedirectUri"), "runtime.cognito.logoutRedirectUri", origin
+        ),
+    )
+
+
 def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:
     if value is None:
         return None
@@ -188,7 +238,8 @@ def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:
         _fail(origin, f'field "runtime" must be an object when present, got {_describe_type(value)}.')
     external = _optional_boolean(value.get("external"), "runtime.external", origin)
     telemetry = _parse_telemetry(value.get("telemetry"), origin)
-    return ManifestRuntime(external=external, telemetry=telemetry)
+    cognito = _parse_cognito(value.get("cognito"), origin)
+    return ManifestRuntime(external=external, telemetry=telemetry, cognito=cognito)
 
 
 # ─── Entrada de validação ──────────────────────────────────────────────────────

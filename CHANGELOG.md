@@ -39,6 +39,18 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
     `/auth/logout`) sem importar `express`, mais as primitivas para qualquer
     framework.
 
+- **Paridade Python** — `pump_evolution.integrations.cognito.CognitoLogin`, no
+  caminho de import exato que a plataforma documenta. Mesmo contrato:
+  `from_manifest()`, `from_env()`, as primitivas, e `install(app)` montando
+  `/auth/login`, `/auth/callback` e `/auth/logout`. `user_resolver` e
+  `id_token_resolver` casam com o `PumpIdentityMiddleware` que já existia.
+
+  As rotas são testadas contra **Starlette real** — cliente HTTP, app e sessão de
+  verdade. Duplo de app só confirmaria o formato que imaginei, que foi como o
+  `instrument_mcp_server` passou meses sem instrumentar o servidor de baixo nível
+  com a suíte verde. `starlette`, `itsdangerous` e `httpx` entram como
+  dev-dependencies só para isso.
+
 - **`runtime.cognito` no manifesto** — `ManifestCognito` e validação no
   `manifest-loader`. Os cinco campos que a plataforma sempre emite são
   obrigatórios quando o bloco existe: um bloco pela metade falharia depois, no
