@@ -7,6 +7,34 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-08-27
+
+### Added
+
+- **`py/README.md`**, que o `py/pyproject.toml` declarava em `readme` sem que o
+  arquivo existisse — o build tolerava, mas era declaração falsa e o pacote
+  Python ia para os integradores sem documentação própria. Cobre instalação,
+  init, Bedrock, MCP (com a tabela de qual classe cai em qual caminho),
+  identidade e shutdown. Todos os exemplos foram executados antes de commitar:
+  `UserContext` e `McpToolInvocation` são dataclasses, não dicts, e a primeira
+  versão do texto errava os dois.
+
+- **O `build_vendor_zip.py` passa a levar o `py/README.md` para
+  `python/src/`**, ao lado do `pyproject.toml` que o declara. Sem isso o README
+  existiria no repositório e não no pacote — a documentação do lado Python nunca
+  chegaria em quem integra, que é o único lugar onde ela importa. A montagem
+  agora falha se o arquivo sumir, em vez de publicar um pacote sem docs.
+
+### Changed
+
+- O `publish-s3` passa a documentar **quais permissões de IAM o usuário de CI
+  precisa** e por quê: `PutObject` e `GetObject` no prefixo `sdk/*`, mais
+  `ListBucket` no bucket. O `ListBucket` não é redundante — sem ele o
+  `HeadObject` responde 403 até para chave inexistente, em vez de 404, e o guard
+  não consegue distinguir "não existe" de "não posso ver". O usuário não está em
+  Terraform nenhum, então a exigência não aparecia em `plan` de ninguém; agora
+  está junto do código que depende dela.
+
 ## [0.0.6] - 2026-08-27
 
 ### Fixed

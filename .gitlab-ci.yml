@@ -144,6 +144,25 @@ package-zip:
 # branch; sem ele, a fronteira é a mesma que a plataforma já aceita para deploy
 # em produção.
 #
+# ── Permissões que o usuário de CI precisa (IAM: gitlab-cicd-sdk, conta 029765331397)
+#
+# Não basta escrever. O guard abaixo pergunta ao S3 se a chave já existe, e para
+# isso são DUAS permissões no bucket de artefatos:
+#
+#   s3:PutObject    em .../sdk/*   — publicar
+#   s3:GetObject    em .../sdk/*   — ler a chave
+#   s3:ListBucket   no bucket      — saber se ela existe
+#
+# O `ListBucket` não é redundante: sem ele o `HeadObject` responde 403 mesmo para
+# chave inexistente (o S3 esconde a existência de quem não pode listar), em vez
+# de 404. Foi o que aconteceu em 27/08/2026 — o guard não conseguia distinguir
+# "não existe" de "não posso ver", e a primeira versão dele publicou por cima em
+# silêncio por causa disso.
+#
+# Este usuário NÃO está em Terraform nenhum (nem aqui nem no repo da plataforma),
+# então a policy é aplicada à mão e não aparece em `plan` de ninguém. Por isso
+# está escrita aqui, junto do código que depende dela.
+#
 # Duas chaves: a versionada dá rastreabilidade e rollback; a `latest` é a que a
 # API lê — o caminho é fixo em sdk.ts. As duas saem a cada merge em `main`.
 # O bucket tem versionamento ligado, então uma publicação ruim é reversível.

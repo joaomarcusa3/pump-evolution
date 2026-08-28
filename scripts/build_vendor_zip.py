@@ -176,6 +176,18 @@ def preparar(versao: str, tgz: Path) -> None:
     destino_py = PREPARO / "python" / "src"
     destino_py.mkdir(parents=True)
     copiar(RAIZ / "py" / "pyproject.toml", destino_py / "pyproject.toml")
+    # O pyproject declara `readme = "README.md"`. Sem o arquivo ao lado dele, o
+    # integrador instala um pacote cujo long_description aponta para o vazio -- e,
+    # pior, a documentacao do lado Python nao chega em quem integra. O `erro` e
+    # proposital: e mais barato a montagem falhar aqui do que descobrir depois
+    # que o pacote publicado saiu sem docs.
+    readme_py = RAIZ / "py" / "README.md"
+    if not readme_py.exists():
+        erro(
+            "py/README.md nao existe, mas py/pyproject.toml o declara em `readme`. "
+            "Crie o arquivo ou remova a declaracao."
+        )
+    copiar(readme_py, destino_py / "README.md")
     # rglob, nao glob: o pacote tem subpacotes (integrations/), e um glob de
     # primeiro nivel os deixaria de fora -- o modulo existiria no git e nao no
     # zip, e quem seguisse a documentacao levaria ModuleNotFoundError.
