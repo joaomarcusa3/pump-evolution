@@ -58,7 +58,8 @@ Colocar na raiz do app (ex: `/app/manifest.yaml`):
 ```yaml
 name: <canonical_name do portal>  # ex: tpz-cel926-meu-agente-001
 kind: agent                        # ou: mcp (se for servidor MCP sem modelo)
-modelId: <inference_profile_id>    # obrigatório pra kind=agent
+modelId: <inference_profile_id>    # obrigatório pra kind=agent — ID do catálogo dinâmico
+                                   # (modelos habilitados na conta), acessado via API pelo SDK
 riskTier: T3-sensitive
 dataClassification: sensitive
 allowedTools: []                   # lista de tools permitidas (vazio = sem check)
@@ -67,7 +68,18 @@ runtime:
   telemetry:
     otelEndpoint: <otelEndpoint — pegue na aba SDK & Telemetria do componente>
     serviceAccountId: <client_id do service account>
+  cognito:                       # login do usuário — provisionado pelo portal/MCP
+    domain: <https://<prefixo>.auth.<region>.amazoncognito.com>
+    clientId: <app client do login>
+    redirectUri: <https://<seu-app>/auth/callback>
+    scopes: openid email profile           # opcional
+    logoutRedirectUri: <https://<seu-app>/>  # opcional
 ```
+
+> O bloco `runtime.cognito` é **git-safe** (sem secret). O portal/MCP provisiona e
+> grava ele no manifesto; o SDK lê com `CognitoLogin.from_manifest()`. O
+> `COGNITO_CLIENT_SECRET` (client confidencial) fica só no `.env.pump`/Secrets
+> Manager — nunca no manifesto.
 
 ### 3. Configurar .env.pump
 
@@ -128,7 +140,9 @@ o middleware consome — uma chamada, sem copiar código:
 from pump_evolution.integrations.cognito import CognitoLogin
 from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
 
-login = CognitoLogin.from_env()   # lê COGNITO_* do .env.pump
+login = CognitoLogin.from_manifest("/app/manifest.yaml")  # lê runtime.cognito do manifesto
+# (o COGNITO_CLIENT_SECRET, se o client for confidencial, ainda vem do .env.pump)
+# Alternativa sem manifesto: CognitoLogin.from_env() lê as variáveis COGNITO_* do .env.pump.
 
 # Monta /auth/login, /auth/callback e /auth/logout.
 # Requer SessionMiddleware montado (guarda state/PKCE e o id_token):
@@ -290,9 +304,21 @@ E no `requirements.txt`:
 
 ## Pontos-chave
 
-1. **O SDK é no-op se `PUMP_EVOLUTION_ENABLED` != `true`** — sem risco de quebrar o agente
-2. **Falha de telemetria NUNCA derruba o processo** — degrada em silêncio
+1. **O SDK é no-op se `PUMP_EVOLUTION_ENABLED` != `true`** — sem risco de quebrar o agente2. **Falha de telemetria NUNCA derruba o processo** — degrada em silêncio
 3. **O login do usuário usa o Cognito da tooling** — App Client por agente,
    provisionado no install; é ele que carrega os claims de custo governados
 4. **Identidade vem do id_token do pool da tooling** — decodifica claims, não valida assinatura
 5. **Span DEVE ter `gen_ai.operation.name = "chat"`** — sem isso o CTA não aceita (`accepted: 0`)
+6. **Catálogo de modelos é dinâmico e responsabilidade do SDK** — os modelos válidos são só os
+   habilitados na conta/região. O SDK acessa o catálogo via API da plataforma e o dev configura
+   o `modelId` a partir dele. Nunca fixe um ID de memória no código/manifesto: IDs envelhecem e
+   o Bedrock pode deixar de servir o modelo, quebrando a invocação.
+7. **Runtime gerenciado (opcional) também vem do manifesto** — se o agente for hospedado no
+   runtime de PRD da plataforma, o bloco `runtime.managed` (git-safe, sem secret) é gravado pelo
+   portal/MCP e o SDK monta o cliente com `ManagedAgentClient.fromManifest()` / `from_manifest()`.
+   A credencial de invoke (`PUMP_MANAGED_CLIENT_ID`/`PUMP_MANAGED_CLIENT_SECRET`) fica só no
+   `.env`/Secrets Manager — nunca no manifesto.
+8. **Modelos disponíveis vêm no manifesto (`runtime.models`)** — snapshot que o portal/MCP grava
+   a partir do catálogo vivo do Bedrock (só os habilitados na conta/região), regravado no
+   install/update. O SDK lê essa lista e a entrega ao dev; não é lista digitada à mão e a
+   validação autoritativa segue na API/runtime.

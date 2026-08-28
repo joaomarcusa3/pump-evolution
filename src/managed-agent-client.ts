@@ -26,7 +26,9 @@
  * corpo inválido). Não há fallback silencioso (ADR-0031).
  */
 
+import { loadManifest } from './manifest-loader.js';
 import { ServiceAccountTokenProvider, type FetchLike } from './token-provider.js';
+import type { AgentManifest } from './types.js';
 
 // ─── Scope helper ──────────────────────────────────────────────────────────────
 
@@ -233,6 +235,53 @@ export class ManagedAgentClient {
         tokenUrl: get('PUMP_MANAGED_TOKEN_URL'),
         ...(typeof scope === 'string' && scope.trim().length > 0 ? { scope } : {}),
       },
+    });
+  }
+
+  /**
+   * Monta o cliente a partir do MANIFESTO (`runtime.managed`) — o bloco que o
+   * portal/MCP grava no manifesto quando o agente externo opta pela hospedagem no
+   * runtime gerenciado. Caminho preferido: o dev não copia `PUMP_MANAGED_*` à mão;
+   * o SDK lê a config estável (endpoint, agentId, tokenUrl, scope) do manifesto.
+   *
+   * A CREDENCIAL DE INVOKE (`clientId` + `clientSecret`) NUNCA vem do manifesto
+   * (git-safe): é provisionada show-once. Passe em `options` ou deixe o SDK ler
+   * `PUMP_MANAGED_CLIENT_ID` / `PUMP_MANAGED_CLIENT_SECRET` do ambiente.
+   *
+   * Lança se o manifesto não declarar `runtime.managed` — sem fallback (ADR-0031).
+   */
+  static fromManifest(
+    source: string | AgentManifest,
+    options: {
+      readonly clientId?: string;
+      readonly clientSecret?: string;
+      readonly fetchImpl?: FetchLike;
+      readonly env?: Record<string, string | undefined>;
+    } = {},
+  ): ManagedAgentClient {
+    const manifest = loadManifest(source);
+    const managed = manifest.runtime?.managed;
+    if (managed === undefined) {
+      throw new Error(
+        '[pump-evolution] ManagedAgentClient.fromManifest: manifesto sem `runtime.managed`. ' +
+          'Esse bloco é gravado pelo portal/MCP quando o agente externo opta pelo runtime ' +
+          'gerenciado — sem fallback. Use ManagedAgentClient.fromEnv() se a config vier só do ' +
+          'ambiente.',
+      );
+    }
+    const env = options.env ?? process.env;
+    const clientId = options.clientId ?? env.PUMP_MANAGED_CLIENT_ID ?? '';
+    const clientSecret = options.clientSecret ?? env.PUMP_MANAGED_CLIENT_SECRET ?? '';
+    return new ManagedAgentClient({
+      endpoint: managed.endpoint,
+      agentId: managed.agentId,
+      serviceAccount: {
+        clientId,
+        clientSecret,
+        tokenUrl: managed.tokenUrl,
+        ...(managed.scope !== undefined ? { scope: managed.scope } : {}),
+      },
+      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
   }
 

@@ -56,12 +56,94 @@ export interface ManifestTelemetry {
 }
 
 /**
+ * End-user login (Cognito) configuration declared in the manifest.
+ *
+ * These are the **non-secret** values the portal/MCP provisions for the agent's
+ * user-login App Client (in the platform tooling account) and writes into the
+ * manifest, so the SDK can wire `CognitoLogin` straight from the manifest —
+ * `CognitoLogin.fromManifest(manifest)` — instead of the developer copying the
+ * `COGNITO_*` env vars by hand.
+ *
+ * PRIVACY/SECURITY: the client secret is NEVER stored here (the manifest is
+ * git-safe). A confidential App Client's `COGNITO_CLIENT_SECRET` stays in the
+ * environment / secrets manager and is merged at runtime.
+ */
+export interface ManifestCognito {
+  /** Hosted UI domain, e.g. `https://<prefix>.auth.<region>.amazoncognito.com`. */
+  readonly domain: string;
+  /** App Client id provisioned for this agent (public/PKCE by default). */
+  readonly clientId: string;
+  /** Absolute `/auth/callback` URL registered on the App Client. */
+  readonly redirectUri: string;
+  /** OAuth scopes. Optional — SDK default `openid email profile`. */
+  readonly scopes?: string;
+  /** Where Cognito redirects after logout. Optional. */
+  readonly logoutRedirectUri?: string;
+}
+
+/**
+ * Managed-runtime configuration declared in the manifest.
+ *
+ * These are the **non-secret** values the portal/MCP produces when an external
+ * agent opts into the platform's managed AgentCore runtime, and writes into the
+ * manifest so the SDK can wire `ManagedAgentClient` straight from the manifest —
+ * `ManagedAgentClient.fromManifest(manifest)` — instead of the developer copying
+ * the `PUMP_MANAGED_*` env vars by hand.
+ *
+ * SECURITY: the invoke credential (`clientId` + `clientSecret`) is NEVER stored
+ * here — it is provisioned show-once and lives in the environment / secrets
+ * manager, merged at runtime. Only stable, git-safe wiring lives in the manifest.
+ */
+export interface ManifestManagedRuntime {
+  /** Full invoke endpoint (`<cta>/api/agents/<agentId>/invoke`). */
+  readonly endpoint: string;
+  /** Agent id in the CTA registry (used to derive the invoke scope). */
+  readonly agentId: string;
+  /** OAuth token endpoint (`.../oauth2/token`) of the platform Cognito. */
+  readonly tokenUrl: string;
+  /** Invoke scope. Optional — SDK derives `cta-consumers/invoke:agent:<agentId>`. */
+  readonly scope?: string;
+}
+
+/**
+ * A model available to the agent, as a snapshot the portal/MCP writes into the
+ * manifest from the live Bedrock catalog (`/api/discovery/models`) at install /
+ * update time. Mirrors the catalog shape (`modelId`, `name`, `provider`,
+ * `streaming`).
+ *
+ * IMPORTANT: this is a portal-written **snapshot** of what the account/region has
+ * enabled — NOT a hand-maintained static list. The authoritative availability
+ * check still lives behind the platform API / managed runtime; the manifest list
+ * is what the SDK surfaces to the developer.
+ */
+export interface ManifestModel {
+  /** Inference-profile model id (e.g. `us.anthropic.claude-sonnet-4-6`). */
+  readonly modelId: string;
+  /** Human-readable model name. */
+  readonly name?: string;
+  /** Provider label (e.g. `Anthropic`, `Amazon`). */
+  readonly provider?: string;
+  /** Whether the model supports streaming. */
+  readonly streaming?: boolean;
+}
+
+/**
  * External runtime block (subset of the real `ExternalRuntime`). Only the parts
- * the SDK needs to resolve telemetry defaults are modelled here.
+ * the SDK needs to resolve telemetry, login, managed-runtime and model defaults.
  */
 export interface ManifestRuntime {
   readonly external?: boolean;
   readonly telemetry?: ManifestTelemetry;
+  /** End-user login (Cognito) defaults — source for `CognitoLogin.fromManifest`. */
+  readonly cognito?: ManifestCognito;
+  /** Managed-runtime defaults — source for `ManagedAgentClient.fromManifest`. */
+  readonly managed?: ManifestManagedRuntime;
+  /**
+   * Available models (portal-written snapshot of the account's enabled Bedrock
+   * catalog). The SDK surfaces this list to the developer; it is not a
+   * hand-maintained static list.
+   */
+  readonly models?: readonly ManifestModel[];
 }
 
 /**

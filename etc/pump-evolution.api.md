@@ -121,6 +121,11 @@ export class CognitoLogin {
         logout: (req: ExpressLikeReq, res: ExpressLikeRes) => void;
     };
     static fromEnv(env?: Record<string, string | undefined>): CognitoLogin;
+    static fromManifest(source: string | AgentManifest, options?: {
+        readonly clientSecret?: string;
+        readonly fetchImpl?: CognitoFetchLike;
+        readonly env?: Record<string, string | undefined>;
+    }): CognitoLogin;
     handleCallback(args: {
         code: string;
         codeVerifier: string;
@@ -409,6 +414,12 @@ export class ManagedAgentClient {
         fetchImpl?: FetchLike;
     }): ManagedAgentClient;
     static fromEnv(env?: Record<string, string | undefined>): ManagedAgentClient;
+    static fromManifest(source: string | AgentManifest, options?: {
+        readonly clientId?: string;
+        readonly clientSecret?: string;
+        readonly fetchImpl?: FetchLike;
+        readonly env?: Record<string, string | undefined>;
+    }): ManagedAgentClient;
     invoke(invocation: ManagedAgentInvocation): Promise<ManagedAgentResult>;
 }
 
@@ -466,6 +477,31 @@ export interface ManagedAgentServiceAccount {
 }
 
 // @public
+export interface ManifestCognito {
+    readonly clientId: string;
+    readonly domain: string;
+    readonly logoutRedirectUri?: string;
+    readonly redirectUri: string;
+    readonly scopes?: string;
+}
+
+// @public
+export interface ManifestManagedRuntime {
+    readonly agentId: string;
+    readonly endpoint: string;
+    readonly scope?: string;
+    readonly tokenUrl: string;
+}
+
+// @public
+export interface ManifestModel {
+    readonly modelId: string;
+    readonly name?: string;
+    readonly provider?: string;
+    readonly streaming?: boolean;
+}
+
+// @public
 export interface ManifestOwner {
     // (undocumented)
     readonly costCenter?: string;
@@ -477,8 +513,11 @@ export interface ManifestOwner {
 
 // @public
 export interface ManifestRuntime {
+    readonly cognito?: ManifestCognito;
     // (undocumented)
     readonly external?: boolean;
+    readonly managed?: ManifestManagedRuntime;
+    readonly models?: readonly ManifestModel[];
     // (undocumented)
     readonly telemetry?: ManifestTelemetry;
 }
@@ -825,8 +864,8 @@ export function withUser<T>(ctx: UserContext, fn: () => T): T;
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:1149:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:1149:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1245:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1245:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

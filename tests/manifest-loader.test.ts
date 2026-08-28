@@ -234,3 +234,47 @@ describe('ManifestLoader — MCP kind (the CTA maps MCPs too)', () => {
     ).toThrow(/kind.*must be one of/s);
   });
 });
+
+
+// ─── runtime.models (snapshot do catálogo gravado pelo portal/MCP) ────────────
+
+describe('loadManifest — runtime.models', () => {
+  const base = {
+    name: 'weather-agent',
+    kind: 'agent' as const,
+    modelId: 'anthropic.claude-sonnet-4',
+    allowedTools: [] as string[],
+  };
+
+  it('parses the available-models snapshot', () => {
+    const m = loadManifest({
+      ...base,
+      runtime: {
+        models: [
+          { modelId: 'us.anthropic.claude-sonnet-4-6', name: 'Sonnet 4.6', provider: 'Anthropic', streaming: true },
+          { modelId: 'us.amazon.nova-pro-v1:0' },
+        ],
+      },
+    });
+    expect(m.runtime?.models).toHaveLength(2);
+    expect(m.runtime?.models?.[0]).toEqual({
+      modelId: 'us.anthropic.claude-sonnet-4-6',
+      name: 'Sonnet 4.6',
+      provider: 'Anthropic',
+      streaming: true,
+    });
+    expect(m.runtime?.models?.[1]).toEqual({ modelId: 'us.amazon.nova-pro-v1:0' });
+  });
+
+  it('fails fast when a model entry is missing modelId', () => {
+    expect(() =>
+      loadManifest({ ...base, runtime: { models: [{ name: 'no id' }] } as never }),
+    ).toThrow(/runtime\.models\[0\]\.modelId/);
+  });
+
+  it('fails fast when runtime.models is not an array', () => {
+    expect(() => loadManifest({ ...base, runtime: { models: 'nope' } as never })).toThrow(
+      /runtime\.models" must be an array/,
+    );
+  });
+});

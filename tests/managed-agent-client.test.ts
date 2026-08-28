@@ -225,3 +225,64 @@ describe('ManagedAgentClient.fromEnv', () => {
     expect(() => ManagedAgentClient.fromEnv(ENV)).not.toThrow();
   });
 });
+
+
+// ─── fromManifest (portal/MCP grava runtime.managed; o SDK lê) ────────────────
+
+describe('ManagedAgentClient.fromManifest', () => {
+  const baseManifest = {
+    name: 'weather-agent',
+    kind: 'agent' as const,
+    modelId: 'anthropic.claude-sonnet-4',
+    allowedTools: [] as string[],
+  };
+
+  const managed = {
+    endpoint: 'https://cta.example.com/api/agents/agent-123/invoke',
+    agentId: 'agent-123',
+    tokenUrl: 'https://auth.example.com/oauth2/token',
+  };
+
+  it('reads runtime.managed and merges the invoke credential from env (secret never in manifest)', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      TOKEN_OK,
+      { body: JSON.stringify({ reply: 'ok' }) },
+    ]);
+    const client = ManagedAgentClient.fromManifest(
+      { ...baseManifest, runtime: { managed } },
+      {
+        clientId: 'svc-agent',
+        clientSecret: 's3cr3t',
+        fetchImpl,
+      },
+    );
+    await client.invoke({ message: 'hi' });
+    // 1ª chamada é o token endpoint (client-credentials) — confirma que tokenUrl veio do manifesto.
+    expect(calls[0]!.url).toBe(managed.tokenUrl);
+    // 2ª é a invocação no endpoint do manifesto.
+    expect(calls[1]!.url).toBe(managed.endpoint);
+  });
+
+  it('reads the credential from PUMP_MANAGED_* env when not passed explicitly', async () => {
+    const { fetchImpl, calls } = fakeFetch([TOKEN_OK, { body: JSON.stringify({ reply: 'ok' }) }]);
+    const client = ManagedAgentClient.fromManifest(
+      { ...baseManifest, runtime: { managed } },
+      {
+        env: { PUMP_MANAGED_CLIENT_ID: 'svc-env', PUMP_MANAGED_CLIENT_SECRET: 'sek-env' },
+        fetchImpl,
+      },
+    );
+    await client.invoke({ message: 'hi' });
+    // Cognito client-credentials manda a credencial no Basic auth, não no body.
+    const auth = calls[0]!.headers.Authorization ?? '';
+    expect(auth.startsWith('Basic ')).toBe(true);
+    const decoded = Buffer.from(auth.slice('Basic '.length), 'base64').toString('utf8');
+    expect(decoded).toBe('svc-env:sek-env');
+  });
+
+  it('throws (no fallback) when the manifest has no runtime.managed block', () => {
+    expect(() => ManagedAgentClient.fromManifest(baseManifest, { env: {} })).toThrow(
+      /sem `runtime\.managed`/,
+    );
+  });
+});

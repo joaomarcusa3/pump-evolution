@@ -252,3 +252,58 @@ describe('expressRoutes', () => {
     expect(res.statusCode).toBe(500);
   });
 });
+
+
+// ─── fromManifest (portal/MCP grava runtime.cognito; o SDK lê) ────────────────
+
+describe('CognitoLogin.fromManifest', () => {
+  const baseManifest = {
+    name: 'weather-agent',
+    kind: 'agent' as const,
+    modelId: 'anthropic.claude-sonnet-4',
+    allowedTools: [] as string[],
+  };
+
+  it('builds from runtime.cognito and wires the authorize URL', () => {
+    const l = CognitoLogin.fromManifest(
+      {
+        ...baseManifest,
+        runtime: {
+          cognito: {
+            domain: DOMAIN,
+            clientId: CLIENT_ID,
+            redirectUri: REDIRECT,
+            scopes: 'openid email',
+            logoutRedirectUri: 'https://app.example.com/',
+          },
+        },
+      },
+      { fetchImpl: tokenFetch({}).fetchImpl },
+    );
+    const url = l.authorizeUrl({ state: 's', codeChallenge: 'c' });
+    expect(url).toContain(`${DOMAIN}/oauth2/authorize`);
+    expect(url).toContain(`client_id=${CLIENT_ID}`);
+    expect(url).toContain('scope=openid+email');
+    expect(l.logoutUrl()).toContain(`${DOMAIN}/logout`);
+  });
+
+  it('reads the client secret from env — never from the manifest (fail-closed on secrecy)', () => {
+    const { fetchImpl, seen } = tokenFetch({ id_token: idToken({ email: 'a@b.co' }) });
+    const l = CognitoLogin.fromManifest(
+      {
+        ...baseManifest,
+        runtime: { cognito: { domain: DOMAIN, clientId: CLIENT_ID, redirectUri: REDIRECT } },
+      },
+      { fetchImpl, env: { COGNITO_CLIENT_SECRET: 'sekret' } },
+    );
+    return l.exchangeCode('code', 'verifier').then(() => {
+      const init = seen()?.init as { headers?: Record<string, string> } | undefined;
+      const expected = Buffer.from(`${CLIENT_ID}:sekret`).toString('base64');
+      expect(init?.headers?.Authorization).toBe(`Basic ${expected}`);
+    });
+  });
+
+  it('throws (no fallback) when the manifest has no runtime.cognito block', () => {
+    expect(() => CognitoLogin.fromManifest(baseManifest)).toThrow(/sem `runtime\.cognito`/);
+  });
+});

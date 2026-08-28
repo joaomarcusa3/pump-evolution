@@ -36,6 +36,9 @@ import type {
   AgentManifest,
   DataClassification,
   ItemKind,
+  ManifestCognito,
+  ManifestManagedRuntime,
+  ManifestModel,
   ManifestOwner,
   ManifestRuntime,
   ManifestTelemetry,
@@ -211,6 +214,94 @@ function parseTelemetry(value: unknown, origin: string): ManifestTelemetry | und
   return { otelEndpoint, serviceAccountId };
 }
 
+function parseCognito(value: unknown, origin: string): ManifestCognito | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    fail(
+      origin,
+      `field "runtime.cognito" must be an object when present, got ${describeType(value)}.`,
+    );
+  }
+  const domain = requireNonEmptyString(value.domain, 'runtime.cognito.domain', origin);
+  const clientId = requireNonEmptyString(value.clientId, 'runtime.cognito.clientId', origin);
+  const redirectUri = requireNonEmptyString(
+    value.redirectUri,
+    'runtime.cognito.redirectUri',
+    origin,
+  );
+  const scopes = optionalNonEmptyString(value.scopes, 'runtime.cognito.scopes', origin);
+  const logoutRedirectUri = optionalNonEmptyString(
+    value.logoutRedirectUri,
+    'runtime.cognito.logoutRedirectUri',
+    origin,
+  );
+  return {
+    domain,
+    clientId,
+    redirectUri,
+    ...(scopes !== undefined ? { scopes } : {}),
+    ...(logoutRedirectUri !== undefined ? { logoutRedirectUri } : {}),
+  };
+}
+
+function parseManaged(value: unknown, origin: string): ManifestManagedRuntime | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    fail(
+      origin,
+      `field "runtime.managed" must be an object when present, got ${describeType(value)}.`,
+    );
+  }
+  const endpoint = requireNonEmptyString(value.endpoint, 'runtime.managed.endpoint', origin);
+  const agentId = requireNonEmptyString(value.agentId, 'runtime.managed.agentId', origin);
+  const tokenUrl = requireNonEmptyString(value.tokenUrl, 'runtime.managed.tokenUrl', origin);
+  const scope = optionalNonEmptyString(value.scope, 'runtime.managed.scope', origin);
+  return {
+    endpoint,
+    agentId,
+    tokenUrl,
+    ...(scope !== undefined ? { scope } : {}),
+  };
+}
+
+function parseModels(value: unknown, origin: string): readonly ManifestModel[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    fail(
+      origin,
+      `field "runtime.models" must be an array when present, got ${describeType(value)}.`,
+    );
+  }
+  const models: ManifestModel[] = [];
+  value.forEach((item, index) => {
+    if (!isRecord(item)) {
+      fail(
+        origin,
+        `field "runtime.models[${index}]" must be an object, got ${describeType(item)}.`,
+      );
+    }
+    const modelId = requireNonEmptyString(item.modelId, `runtime.models[${index}].modelId`, origin);
+    const name = optionalNonEmptyString(item.name, `runtime.models[${index}].name`, origin);
+    const provider = optionalNonEmptyString(
+      item.provider,
+      `runtime.models[${index}].provider`,
+      origin,
+    );
+    const streaming = optionalBoolean(
+      item.streaming,
+      `runtime.models[${index}].streaming`,
+      origin,
+    );
+    models.push({
+      modelId,
+      ...(name !== undefined ? { name } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(streaming !== undefined ? { streaming } : {}),
+    });
+  });
+  return models;
+}
+
 function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) {
@@ -218,9 +309,15 @@ function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefin
   }
   const external = optionalBoolean(value.external, 'runtime.external', origin);
   const telemetry = parseTelemetry(value.telemetry, origin);
+  const cognito = parseCognito(value.cognito, origin);
+  const managed = parseManaged(value.managed, origin);
+  const models = parseModels(value.models, origin);
   return {
     ...(external !== undefined ? { external } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
+    ...(cognito !== undefined ? { cognito } : {}),
+    ...(managed !== undefined ? { managed } : {}),
+    ...(models !== undefined ? { models } : {}),
   };
 }
 

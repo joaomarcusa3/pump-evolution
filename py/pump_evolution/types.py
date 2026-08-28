@@ -58,12 +58,74 @@ class ManifestTelemetry:
 
 
 @dataclass(frozen=True)
+class ManifestCognito:
+    """Config de LOGIN do usuário (Cognito) declarada no manifesto.
+
+    São os valores NÃO-SECRETOS que o portal/MCP provisiona para o App Client de
+    login do agente (no pool de tooling da plataforma) e grava no manifesto, para
+    o SDK montar o `CognitoLogin` direto do manifesto (`CognitoLogin.from_manifest`)
+    — sem o dev copiar as variáveis `COGNITO_*` à mão.
+
+    SEGURANÇA: o client secret NUNCA fica aqui (o manifesto é git-safe). O
+    `COGNITO_CLIENT_SECRET` de um App Client confidencial vive no ambiente /
+    secrets manager e é mesclado em runtime."""
+
+    domain: str
+    client_id: str  # YAML: clientId
+    redirect_uri: str  # YAML: redirectUri
+    scopes: Optional[str] = None
+    logout_redirect_uri: Optional[str] = None  # YAML: logoutRedirectUri
+
+
+@dataclass(frozen=True)
+class ManifestManagedRuntime:
+    """Config de RUNTIME GERENCIADO declarada no manifesto.
+
+    Valores NÃO-SECRETOS que o portal/MCP produz quando um agente externo opta
+    pela hospedagem no runtime AgentCore gerenciado da plataforma, gravados no
+    manifesto para o SDK montar o `ManagedAgentClient` direto do manifesto
+    (`ManagedAgentClient.from_manifest`) — sem o dev copiar `PUMP_MANAGED_*` à mão.
+
+    SEGURANÇA: a credencial de invoke (`client_id` + `client_secret`) NUNCA fica
+    aqui — é provisionada show-once e vive no ambiente / secrets manager, mesclada
+    em runtime. Só o wiring estável e git-safe vive no manifesto."""
+
+    endpoint: str  # <cta>/api/agents/<agentId>/invoke
+    agent_id: str  # YAML: agentId
+    token_url: str  # YAML: tokenUrl
+    scope: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ManifestModel:
+    """Um modelo disponível ao agente — snapshot que o portal/MCP grava no
+    manifesto a partir do catálogo vivo do Bedrock (`/api/discovery/models`) no
+    install/update. Espelha o shape do catálogo.
+
+    IMPORTANTE: é um SNAPSHOT do que a conta/região tem habilitado — NÃO uma lista
+    estática mantida à mão. A checagem autoritativa de disponibilidade segue na
+    API/runtime; a lista do manifesto é o que o SDK entrega ao dev."""
+
+    model_id: str  # YAML: modelId
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    streaming: Optional[bool] = None
+
+
+@dataclass(frozen=True)
 class ManifestRuntime:
     """Bloco external runtime (subconjunto do `ExternalRuntime` real). Só as
-    partes que o SDK precisa para resolver os defaults de telemetria."""
+    partes que o SDK precisa para resolver os defaults de telemetria, login,
+    runtime gerenciado e modelos."""
 
     external: Optional[bool] = None
     telemetry: Optional[ManifestTelemetry] = None
+    # Defaults de login do usuário (Cognito) — fonte do `CognitoLogin.from_manifest`.
+    cognito: Optional[ManifestCognito] = None
+    # Defaults de runtime gerenciado — fonte do `ManagedAgentClient.from_manifest`.
+    managed: Optional[ManifestManagedRuntime] = None
+    # Modelos disponíveis (snapshot do catálogo habilitado, gravado pelo portal/MCP).
+    models: Optional[List[ManifestModel]] = None
 
 
 @dataclass(frozen=True)

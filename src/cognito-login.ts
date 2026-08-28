@@ -61,7 +61,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import { claimsToUserContext } from './identity-context.js';
-import type { UserContext } from './types.js';
+import { loadManifest } from './manifest-loader.js';
+import type { AgentManifest, UserContext } from './types.js';
 
 // ─── fetch injetável (paridade com consumer-auth / token-provider) ────────────
 
@@ -168,6 +169,51 @@ export class CognitoLogin {
       ...(env.COGNITO_LOGOUT_REDIRECT_URI
         ? { logoutRedirectUri: env.COGNITO_LOGOUT_REDIRECT_URI }
         : {}),
+    });
+  }
+
+  /**
+   * Constrói a partir do MANIFESTO (`runtime.cognito`) — o bloco que o portal/MCP
+   * provisiona e grava no manifesto no install. É o caminho preferido: o dev não
+   * copia `COGNITO_*` à mão; o SDK lê tudo do manifesto.
+   *
+   * O `clientSecret` NUNCA vem do manifesto (git-safe). Para um App Client
+   * confidencial, passe `clientSecret` em `options` ou deixe o SDK ler
+   * `COGNITO_CLIENT_SECRET` do ambiente. Cliente público (PKCE) não precisa dele.
+   *
+   * Lança se o manifesto não declarar `runtime.cognito` — sem fallback (ADR-0031):
+   * ausência de config de login é explícita, não silenciosa.
+   */
+  static fromManifest(
+    source: string | AgentManifest,
+    options: {
+      readonly clientSecret?: string;
+      readonly fetchImpl?: CognitoFetchLike;
+      readonly env?: Record<string, string | undefined>;
+    } = {},
+  ): CognitoLogin {
+    const manifest = loadManifest(source);
+    const cognito = manifest.runtime?.cognito;
+    if (cognito === undefined) {
+      throw new Error(
+        '[pump-evolution] CognitoLogin.fromManifest: manifesto sem `runtime.cognito`. ' +
+          'Esse bloco é provisionado pelo portal/MCP no install (App Client de login) e ' +
+          'gravado no manifesto — sem fallback. Use CognitoLogin.fromEnv() se o login vier ' +
+          'só do ambiente.',
+      );
+    }
+    const env = options.env ?? process.env;
+    const clientSecret = options.clientSecret ?? env.COGNITO_CLIENT_SECRET;
+    return new CognitoLogin({
+      domain: cognito.domain,
+      clientId: cognito.clientId,
+      redirectUri: cognito.redirectUri,
+      ...(isNonEmpty(clientSecret) ? { clientSecret } : {}),
+      ...(cognito.scopes !== undefined ? { scopes: cognito.scopes } : {}),
+      ...(cognito.logoutRedirectUri !== undefined
+        ? { logoutRedirectUri: cognito.logoutRedirectUri }
+        : {}),
+      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
   }
 

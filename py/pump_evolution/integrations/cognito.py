@@ -168,7 +168,45 @@ class CognitoLogin:
         )
         return cls(cfg)
 
-    # ─── Instalação das rotas ─────────────────────────────────────────────────
+    @classmethod
+    def from_manifest(
+        cls,
+        source: Any,
+        *,
+        client_secret: Optional[str] = None,
+        env: Optional[dict] = None,
+    ) -> "CognitoLogin":
+        """Constrói a partir do MANIFESTO (`runtime.cognito`) — o bloco que o
+        portal/MCP provisiona e grava no manifesto no install. Caminho preferido:
+        o dev não copia `COGNITO_*` à mão; o SDK lê tudo do manifesto.
+
+        O `client_secret` NUNCA vem do manifesto (git-safe). Para App Client
+        confidencial, passe `client_secret` ou deixe o SDK ler `COGNITO_CLIENT_SECRET`
+        do ambiente. Cliente público (PKCE) não precisa dele.
+
+        Lança se o manifesto não declarar `runtime.cognito` — sem fallback (ADR-0031)."""
+        from ..manifest_loader import load_manifest
+
+        manifest = load_manifest(source)
+        cognito = manifest.runtime.cognito if manifest.runtime else None
+        if cognito is None:
+            raise ValueError(
+                "[pump-evolution] CognitoLogin.from_manifest: manifesto sem `runtime.cognito`. "
+                "Esse bloco é provisionado pelo portal/MCP no install (App Client de login) e "
+                "gravado no manifesto — sem fallback. Use CognitoLogin.from_env() se o login "
+                "vier só do ambiente."
+            )
+        src = env if env is not None else os.environ
+        secret = client_secret if client_secret is not None else src.get("COGNITO_CLIENT_SECRET")
+        cfg = CognitoLoginConfig(
+            domain=cognito.domain,
+            client_id=cognito.client_id,
+            redirect_uri=cognito.redirect_uri,
+            client_secret=(secret or None),
+            scopes=(cognito.scopes or _DEFAULT_SCOPES),
+            logout_redirect_uri=cognito.logout_redirect_uri,
+        )
+        return cls(cfg)
 
     def install(self, app: Any, *, prefix: str = "/auth") -> None:
         """Monta `/auth/login`, `/auth/callback` e `/auth/logout` no app.

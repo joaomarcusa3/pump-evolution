@@ -187,6 +187,56 @@ class ManagedAgentClient:
             fetch_impl=fetch_impl,
         )
 
+    @classmethod
+    def from_manifest(
+        cls,
+        source: Any,
+        *,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        env: Optional[Mapping[str, str]] = None,
+        fetch_impl: Optional[FetchLike] = None,
+    ) -> "ManagedAgentClient":
+        """Monta o cliente a partir do MANIFESTO (``runtime.managed``) — o bloco que
+        o portal/MCP grava quando o agente externo opta pela hospedagem no runtime
+        gerenciado. Caminho preferido: o dev não copia ``PUMP_MANAGED_*`` à mão.
+
+        A credencial de invoke (``client_id`` + ``client_secret``) NUNCA vem do
+        manifesto (git-safe): é provisionada show-once. Passe explicitamente ou
+        deixe o SDK ler ``PUMP_MANAGED_CLIENT_ID`` / ``PUMP_MANAGED_CLIENT_SECRET``
+        do ambiente. Lança se o manifesto não declarar ``runtime.managed``."""
+        from .manifest_loader import load_manifest
+
+        manifest = load_manifest(source)
+        managed = manifest.runtime.managed if manifest.runtime else None
+        if managed is None:
+            raise ValueError(
+                "[pump-evolution] ManagedAgentClient.from_manifest: manifesto sem "
+                "`runtime.managed`. Esse bloco é gravado pelo portal/MCP quando o agente "
+                "externo opta pelo runtime gerenciado — sem fallback. Use "
+                "ManagedAgentClient.from_env() se a config vier só do ambiente."
+            )
+        source_env: Mapping[str, str] = env if env is not None else os.environ
+        cid = client_id if client_id is not None else source_env.get("PUMP_MANAGED_CLIENT_ID", "")
+        secret = (
+            client_secret
+            if client_secret is not None
+            else source_env.get("PUMP_MANAGED_CLIENT_SECRET", "")
+        )
+        service_account: Dict[str, str] = {
+            "client_id": cid or "",
+            "client_secret": secret or "",
+            "token_url": managed.token_url,
+        }
+        if managed.scope:
+            service_account["scope"] = managed.scope
+        return cls(
+            endpoint=managed.endpoint,
+            agent_id=managed.agent_id,
+            service_account=service_account,
+            fetch_impl=fetch_impl,
+        )
+
     async def invoke(
         self,
         *,

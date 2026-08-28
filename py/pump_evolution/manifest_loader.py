@@ -32,6 +32,9 @@ from .constants import (
 from .types import (
     CTA_ITEM_KIND,
     AgentManifest,
+    ManifestCognito,
+    ManifestManagedRuntime,
+    ManifestModel,
     ManifestOwner,
     ManifestRuntime,
     ManifestTelemetry,
@@ -181,6 +184,80 @@ def _parse_telemetry(value: Any, origin: str) -> Optional[ManifestTelemetry]:
     return ManifestTelemetry(otel_endpoint=otel_endpoint, service_account_id=service_account_id)
 
 
+def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
+    if value is None:
+        return None
+    if not _is_record(value):
+        _fail(
+            origin,
+            f'field "runtime.cognito" must be an object when present, got {_describe_type(value)}.',
+        )
+    domain = _require_non_empty_string(value.get("domain"), "runtime.cognito.domain", origin)
+    client_id = _require_non_empty_string(value.get("clientId"), "runtime.cognito.clientId", origin)
+    redirect_uri = _require_non_empty_string(
+        value.get("redirectUri"), "runtime.cognito.redirectUri", origin
+    )
+    scopes = _optional_non_empty_string(value.get("scopes"), "runtime.cognito.scopes", origin)
+    logout_redirect_uri = _optional_non_empty_string(
+        value.get("logoutRedirectUri"), "runtime.cognito.logoutRedirectUri", origin
+    )
+    return ManifestCognito(
+        domain=domain,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scopes=scopes,
+        logout_redirect_uri=logout_redirect_uri,
+    )
+
+
+def _parse_managed(value: Any, origin: str) -> Optional[ManifestManagedRuntime]:
+    if value is None:
+        return None
+    if not _is_record(value):
+        _fail(
+            origin,
+            f'field "runtime.managed" must be an object when present, got {_describe_type(value)}.',
+        )
+    endpoint = _require_non_empty_string(value.get("endpoint"), "runtime.managed.endpoint", origin)
+    agent_id = _require_non_empty_string(value.get("agentId"), "runtime.managed.agentId", origin)
+    token_url = _require_non_empty_string(value.get("tokenUrl"), "runtime.managed.tokenUrl", origin)
+    scope = _optional_non_empty_string(value.get("scope"), "runtime.managed.scope", origin)
+    return ManifestManagedRuntime(
+        endpoint=endpoint, agent_id=agent_id, token_url=token_url, scope=scope
+    )
+
+
+def _parse_models(value: Any, origin: str) -> Optional[List[ManifestModel]]:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        _fail(
+            origin,
+            f'field "runtime.models" must be an array when present, got {_describe_type(value)}.',
+        )
+    models: List[ManifestModel] = []
+    for index, item in enumerate(value):
+        if not _is_record(item):
+            _fail(
+                origin,
+                f'field "runtime.models[{index}]" must be an object, got {_describe_type(item)}.',
+            )
+        model_id = _require_non_empty_string(
+            item.get("modelId"), f"runtime.models[{index}].modelId", origin
+        )
+        name = _optional_non_empty_string(item.get("name"), f"runtime.models[{index}].name", origin)
+        provider = _optional_non_empty_string(
+            item.get("provider"), f"runtime.models[{index}].provider", origin
+        )
+        streaming = _optional_boolean(
+            item.get("streaming"), f"runtime.models[{index}].streaming", origin
+        )
+        models.append(
+            ManifestModel(model_id=model_id, name=name, provider=provider, streaming=streaming)
+        )
+    return models
+
+
 def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:
     if value is None:
         return None
@@ -188,7 +265,12 @@ def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:
         _fail(origin, f'field "runtime" must be an object when present, got {_describe_type(value)}.')
     external = _optional_boolean(value.get("external"), "runtime.external", origin)
     telemetry = _parse_telemetry(value.get("telemetry"), origin)
-    return ManifestRuntime(external=external, telemetry=telemetry)
+    cognito = _parse_cognito(value.get("cognito"), origin)
+    managed = _parse_managed(value.get("managed"), origin)
+    models = _parse_models(value.get("models"), origin)
+    return ManifestRuntime(
+        external=external, telemetry=telemetry, cognito=cognito, managed=managed, models=models
+    )
 
 
 # ─── Entrada de validação ──────────────────────────────────────────────────────
