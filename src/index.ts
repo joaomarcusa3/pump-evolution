@@ -40,6 +40,8 @@ export type {
   SecurityConfig,
 } from './bedrock-instrumentation.js';
 export { traceMcpTool, instrumentMcpServer } from './mcp-instrumentation.js';
+export { CognitoLogin, safeNextPath } from './cognito-login.js';
+export type { CognitoFetchLike, CognitoLoginConfig, CallbackResult, Pkce } from './cognito-login.js';
 export type { McpToolTracerDeps } from './mcp-instrumentation.js';
 export { ConsumerTokenVerifier } from './consumer-auth.js';
 export type { ConsumerAuthConfig, ConsumerAuthResult, JwksFetchLike } from './consumer-auth.js';
@@ -96,6 +98,7 @@ export type {
   DataClassification,
   ItemKind,
   ManifestOwner,
+  ManifestCognito,
   ManifestRuntime,
   ManifestTelemetry,
   McpToolInvocation,
