@@ -53,6 +53,17 @@ export interface BedrockInstrumentationDeps {
 export function buildResource(attributes: ResourceAttributes): Resource;
 
 // @public
+export type CallbackResult = {
+    readonly ok: true;
+    readonly idToken: string;
+    readonly user: UserContext;
+    readonly tokens: Record<string, unknown>;
+} | {
+    readonly ok: false;
+    readonly reason: string;
+};
+
+// @public
 export const CHAT_OPERATION: "chat";
 
 // @public
@@ -82,6 +93,67 @@ export type CircuitState = 'closed' | 'open' | 'half-open';
 
 // @public
 export function claimsToUserContext(claims: Record<string, unknown>): UserContext;
+
+// @public
+export type CognitoFetchLike = (input: string, init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+}) => Promise<{
+    ok: boolean;
+    status: number;
+    text: () => Promise<string>;
+}>;
+
+// @public (undocumented)
+export class CognitoLogin {
+    constructor(config: CognitoLoginConfig);
+    authorizeUrl(args: {
+        state: string;
+        codeChallenge: string;
+    }): string;
+    createPkce(): Pkce;
+    createState(): string;
+    exchangeCode(code: string, codeVerifier: string): Promise<{
+        readonly ok: true;
+        readonly tokens: Record<string, unknown>;
+    } | {
+        readonly ok: false;
+        readonly reason: string;
+    }>;
+    expressRoutes(): {
+        login: (req: ExpressLikeReq, res: ExpressLikeRes) => void;
+        callback: (req: ExpressLikeReq, res: ExpressLikeRes) => Promise<void>;
+        logout: (req: ExpressLikeReq, res: ExpressLikeRes) => void;
+    };
+    static fromEnv(env?: Record<string, string | undefined>, overrides?: Partial<CognitoLoginConfig>): CognitoLogin;
+    static fromManifest(manifest: string | AgentManifest, overrides?: Partial<CognitoLoginConfig> & {
+        readonly env?: Record<string, string | undefined>;
+    }): CognitoLogin;
+    handleCallback(args: {
+        code: string;
+        codeVerifier: string;
+    }): Promise<CallbackResult>;
+    get issuer(): string | undefined;
+    logoutUrl(): string | undefined;
+    userContextFromIdToken(idToken: string | undefined): UserContext;
+}
+
+// @public (undocumented)
+export interface CognitoLoginConfig {
+    readonly clientId: string;
+    readonly clientSecret?: string;
+    readonly domain: string;
+    readonly fetchImpl?: CognitoFetchLike;
+    readonly identityProvider?: string;
+    readonly issuer?: string;
+    readonly logger?: TelemetryLogger;
+    readonly logoutRedirectUri?: string;
+    readonly now?: () => number;
+    readonly redirectUri: string;
+    readonly scopes?: string;
+}
 
 // @public
 export interface ComplianceConfig {
@@ -343,6 +415,18 @@ export function loadManifest(source: string | AgentManifest): AgentManifest;
 export function loadResourceAttributes(source: string | AgentManifest): ResourceAttributes;
 
 // @public
+export interface ManifestCognito {
+    readonly clientId: string;
+    readonly domain: string;
+    readonly identityProvider?: string;
+    readonly identityProviders?: readonly string[];
+    readonly issuer: string;
+    readonly logoutRedirectUri?: string;
+    readonly redirectUri: string;
+    readonly scopes: string;
+}
+
+// @public
 export interface ManifestOwner {
     // (undocumented)
     readonly costCenter?: string;
@@ -354,6 +438,8 @@ export interface ManifestOwner {
 
 // @public
 export interface ManifestRuntime {
+    // (undocumented)
+    readonly cognito?: ManifestCognito;
     // (undocumented)
     readonly external?: boolean;
     // (undocumented)
@@ -418,6 +504,14 @@ export type OwaspLlmCategory = 'LLM01' | 'LLM02' | 'LLM03' | 'LLM04' | 'LLM05' |
 
 // @public
 export function parseIdentityHeaders(input: IdentityHeaderInput): UserContext | undefined;
+
+// @public
+export interface Pkce {
+    // (undocumented)
+    readonly challenge: string;
+    // (undocumented)
+    readonly verifier: string;
+}
 
 // @public
 export const PROVIDER_AWS_BEDROCK: "aws.bedrock";
@@ -557,6 +651,9 @@ export interface RetryOptions {
 
 // @public
 export type RiskTier = 'T1-low' | 'T2-medium' | 'T3-sensitive' | 'T4-autonomous';
+
+// @public
+export function safeNextPath(value: unknown): string;
 
 // @public
 export interface SecurityConfig {
@@ -704,6 +801,11 @@ export function withRetry<T>(fn: () => Promise<T>, options?: RetryOptions): Prom
 
 // @public
 export function withUser<T>(ctx: UserContext, fn: () => T): T;
+
+// Warnings were encountered during analysis:
+//
+// dist/index.d.ts:1203:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1203:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

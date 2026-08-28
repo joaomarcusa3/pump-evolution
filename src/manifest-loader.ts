@@ -37,6 +37,7 @@ import type {
   DataClassification,
   ItemKind,
   ManifestOwner,
+  ManifestCognito,
   ManifestRuntime,
   ManifestTelemetry,
   ResourceAttributes,
@@ -211,6 +212,63 @@ function parseTelemetry(value: unknown, origin: string): ManifestTelemetry | und
   return { otelEndpoint, serviceAccountId };
 }
 
+/**
+ * Optional array of non-empty strings. Used by `runtime.cognito.identityProviders`,
+ * where absent and empty mean the same thing: no federated IdP on the pool.
+ */
+function optionalStringArray(value: unknown, field: string, origin: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    fail(origin, `field "${field}" must be an array when present, got ${describeType(value)}.`);
+  }
+  return value.map((item, index) => requireNonEmptyString(item, `${field}[${index}]`, origin));
+}
+
+/**
+ * End-user login block (`runtime.cognito`), written by the platform when the App
+ * Client is provisioned.
+ *
+ * `domain`, `issuer`, `clientId`, `redirectUri` and `scopes` are REQUIRED once
+ * the block exists. A half-written block is worse than none: the login would
+ * fail later at the Hosted UI with an opaque message, instead of here, at load
+ * time, naming the field. The platform refuses to emit the block without them,
+ * so a partial one means someone edited it by hand.
+ */
+function parseCognito(value: unknown, origin: string): ManifestCognito | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    fail(
+      origin,
+      `field "runtime.cognito" must be an object when present, got ${describeType(value)}.`,
+    );
+  }
+  const identityProviders = optionalStringArray(
+    value.identityProviders,
+    'runtime.cognito.identityProviders',
+    origin,
+  );
+  const identityProvider = optionalNonEmptyString(
+    value.identityProvider,
+    'runtime.cognito.identityProvider',
+    origin,
+  );
+  const logoutRedirectUri = optionalNonEmptyString(
+    value.logoutRedirectUri,
+    'runtime.cognito.logoutRedirectUri',
+    origin,
+  );
+  return {
+    domain: requireNonEmptyString(value.domain, 'runtime.cognito.domain', origin),
+    issuer: requireNonEmptyString(value.issuer, 'runtime.cognito.issuer', origin),
+    clientId: requireNonEmptyString(value.clientId, 'runtime.cognito.clientId', origin),
+    redirectUri: requireNonEmptyString(value.redirectUri, 'runtime.cognito.redirectUri', origin),
+    scopes: requireNonEmptyString(value.scopes, 'runtime.cognito.scopes', origin),
+    ...(identityProviders !== undefined ? { identityProviders } : {}),
+    ...(identityProvider !== undefined ? { identityProvider } : {}),
+    ...(logoutRedirectUri !== undefined ? { logoutRedirectUri } : {}),
+  };
+}
+
 function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) {
@@ -218,9 +276,11 @@ function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefin
   }
   const external = optionalBoolean(value.external, 'runtime.external', origin);
   const telemetry = parseTelemetry(value.telemetry, origin);
+  const cognito = parseCognito(value.cognito, origin);
   return {
     ...(external !== undefined ? { external } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
+    ...(cognito !== undefined ? { cognito } : {}),
   };
 }
 

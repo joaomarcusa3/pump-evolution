@@ -234,3 +234,63 @@ describe('ManifestLoader — MCP kind (the CTA maps MCPs too)', () => {
     ).toThrow(/kind.*must be one of/s);
   });
 });
+
+// ─── runtime.cognito — bloco que a Factory grava ao provisionar o login ───────
+
+describe('runtime.cognito', () => {
+  const completo = {
+    domain: 'https://p.auth.us-east-1.amazoncognito.com',
+    issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC',
+    clientId: 'abc123',
+    redirectUri: 'https://app/auth/callback',
+    scopes: 'openid email profile',
+  };
+
+  it('preserva os campos que a plataforma emite, incluindo os opcionais', () => {
+    const m = loadManifest({
+      name: 'a',
+      kind: 'mcp',
+      allowedTools: [],
+      runtime: {
+        cognito: {
+          ...completo,
+          identityProviders: ['Microsoft'],
+          identityProvider: 'Microsoft',
+          logoutRedirectUri: 'https://app/bye',
+        },
+      },
+    } as never);
+    expect(m.runtime?.cognito?.issuer).toBe(completo.issuer);
+    expect(m.runtime?.cognito?.identityProvider).toBe('Microsoft');
+    expect(m.runtime?.cognito?.identityProviders).toEqual(['Microsoft']);
+    expect(m.runtime?.cognito?.logoutRedirectUri).toBe('https://app/bye');
+  });
+
+  it('omite os opcionais ausentes em vez de preencher com placeholder', () => {
+    const m = loadManifest({ name: 'a', kind: 'mcp', allowedTools: [], runtime: { cognito: completo } } as never);
+    expect(m.runtime?.cognito?.identityProvider).toBeUndefined();
+    expect(m.runtime?.cognito?.identityProviders).toBeUndefined();
+  });
+
+  it.each(['domain', 'issuer', 'clientId', 'redirectUri', 'scopes'])(
+    'falha nomeando o campo quando "%s" falta — bloco pela metade é pior que nenhum',
+    (campo) => {
+      const parcial: Record<string, unknown> = { ...completo };
+      delete parcial[campo];
+      expect(() =>
+        loadManifest({ name: 'a', kind: 'mcp', allowedTools: [], runtime: { cognito: parcial } } as never),
+      ).toThrow(new RegExp(`runtime\.cognito\.${campo}`));
+    },
+  );
+
+  it('recusa identityProviders que não seja array de strings', () => {
+    expect(() =>
+      loadManifest({
+        name: 'a',
+        kind: 'mcp',
+        allowedTools: [],
+        runtime: { cognito: { ...completo, identityProviders: 'Microsoft' } },
+      } as never),
+    ).toThrow(/runtime\.cognito\.identityProviders/);
+  });
+});

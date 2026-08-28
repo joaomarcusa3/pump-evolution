@@ -56,12 +56,56 @@ export interface ManifestTelemetry {
 }
 
 /**
+ * End-user login block the platform writes into the manifest when the App Client
+ * is provisioned (`cta_factory_provisionar_cognito`). It is the **login of the
+ * people who use the component** — a different identity from
+ * {@link ManifestTelemetry}, which authenticates the process itself. The two
+ * never cross: telemetry is `client_credentials`, this one is
+ * `authorization_code` + PKCE.
+ *
+ * Git-safe by construction: the platform never writes the client secret here.
+ * A confidential client keeps its secret in the portal's show-once vault, and it
+ * reaches the app through the environment.
+ */
+export interface ManifestCognito {
+  /** Hosted UI domain, e.g. `https://<prefix>.auth.<region>.amazoncognito.com`. */
+  readonly domain: string;
+  /**
+   * Token issuer (`https://cognito-idp.<region>.amazonaws.com/<poolId>`). Needed
+   * to validate the caller's JWT and to build the OAuth discovery document.
+   */
+  readonly issuer: string;
+  /** App Client provisioned for this component. */
+  readonly clientId: string;
+  /** Absolute callback URL, registered in the App Client. */
+  readonly redirectUri: string;
+  /** Space-separated OAuth scopes. */
+  readonly scopes: string;
+  /** Federated identity providers enabled on the pool. */
+  readonly identityProviders?: readonly string[];
+  /**
+   * Provider to hand to `/oauth2/authorize` so the user lands straight on the
+   * SSO, skipping the username/password screen.
+   *
+   * The platform only emits this when the pool has EXACTLY ONE federated
+   * provider — with two or more, guessing would send people to the wrong SSO.
+   * So its absence is meaningful, not an omission: fall back to the Hosted UI
+   * picker instead of inventing a value.
+   */
+  readonly identityProvider?: string;
+  /** Where Cognito sends the user after logout. */
+  readonly logoutRedirectUri?: string;
+}
+
+/**
  * External runtime block (subset of the real `ExternalRuntime`). Only the parts
- * the SDK needs to resolve telemetry defaults are modelled here.
+ * the SDK needs to resolve telemetry defaults and the end-user login are
+ * modelled here.
  */
 export interface ManifestRuntime {
   readonly external?: boolean;
   readonly telemetry?: ManifestTelemetry;
+  readonly cognito?: ManifestCognito;
 }
 
 /**

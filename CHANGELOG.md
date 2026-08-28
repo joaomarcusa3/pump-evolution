@@ -7,6 +7,66 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-08-28
+
+### Added
+
+- **`CognitoLogin` — login de usuário final** (TypeScript). Fecha o contrato que
+  a plataforma já entrega em produção: o `cta_factory_provisionar_cognito`
+  provisiona o App Client (`authorization_code` + PKCE) no pool da plataforma,
+  grava `runtime.cognito` no manifesto e imprime o bloco `COGNITO_*` — e até
+  agora nenhuma versão publicada do SDK sabia ler nada disso.
+
+  É a identidade das PESSOAS que usam o componente, distinta do service account
+  de telemetria (`client_credentials`), que autentica o processo. As duas nunca
+  se cruzam: um token de `client_credentials` não tem usuário e, portanto, não
+  tem departamento — que é justamente por que esta segunda identidade precisou
+  existir.
+
+  - **`CognitoLogin.fromManifest('./manifest.yaml')`** — caminho preferido. Lê
+    `runtime.cognito` inteiro, incluindo `issuer`, `identityProviders`,
+    `identityProvider` e `logoutRedirectUri`. Nada é copiado à mão, e o bloco é
+    git-safe: a plataforma nunca escreve secret nele (um client confidencial
+    continua lendo `COGNITO_CLIENT_SECRET` do ambiente).
+  - **`CognitoLogin.fromEnv()`** — lê o bloco `COGNITO_*`, agora incluindo
+    `COGNITO_ISSUER` e `COGNITO_IDENTITY_PROVIDER`.
+  - **`identity_provider` no authorize** — leva o usuário direto ao SSO, pulando
+    a tela de usuário/senha. Só é enviado quando a plataforma o emite, o que ela
+    faz apenas com EXATAMENTE UM IdP federado no pool; com dois ou mais o campo é
+    omitido de propósito, e o SDK cai na tela de escolha em vez de adivinhar e
+    mandar a pessoa para o SSO errado.
+  - Handlers Express/Connect prontos (`/auth/login`, `/auth/callback`,
+    `/auth/logout`) sem importar `express`, mais as primitivas para qualquer
+    framework.
+
+- **`runtime.cognito` no manifesto** — `ManifestCognito` e validação no
+  `manifest-loader`. Os cinco campos que a plataforma sempre emite são
+  obrigatórios quando o bloco existe: um bloco pela metade falharia depois, no
+  Hosted UI, com mensagem opaca — em vez de aqui, no load, nomeando o campo.
+
+### Security
+
+Quatro decisões que valem registro, todas verificadas por teste:
+
+- **Redirect pós-login restrito a caminho same-site.** `startsWith('/')` sozinho
+  deixa passar `//evil.com` e `/\evil.com`, que o browser lê como URL
+  protocol-relative — open redirect num usuário JÁ AUTENTICADO. `safeNextPath`
+  rejeita os dois.
+- **`iss`, `aud` e `exp` do `id_token` são conferidos.** A assinatura não é (o
+  token vem do próprio token endpoint sobre TLS, OIDC Core 3.1.3.7), mas token
+  expirado numa sessão longa atribuiria spans a quem saiu horas atrás, e token de
+  outro pool viraria identidade sem ninguém notar.
+- **Falha de login não é silenciosa.** `exchangeCode` devolve o motivo E reporta
+  no `logger` injetável, com o `error_description` do Cognito — que é o que
+  distingue secret errado de `redirect_uri` divergente. Sem isso, um 401 vira um
+  302 indistinguível de sucesso.
+- **`state` comparado em tempo constante**, e limpo da sessão antes de qualquer
+  retorno — callback replicado não reaproveita.
+
+Logout sem `logoutRedirectUri` avisa pelo logger que a sessão do Cognito
+continua viva: limpar só a sessão local faz o próximo login não pedir nada, e o
+usuário jura que deslogou.
+
 ## [0.0.7] - 2026-08-27
 
 ### Added
