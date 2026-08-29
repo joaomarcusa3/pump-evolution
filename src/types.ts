@@ -71,16 +71,19 @@ export interface ManifestCognito {
   /** Hosted UI domain, e.g. `https://<prefix>.auth.<region>.amazoncognito.com`. */
   readonly domain: string;
   /**
-   * Token issuer (`https://cognito-idp.<region>.amazonaws.com/<poolId>`). Needed
-   * to validate the caller's JWT and to build the OAuth discovery document.
+   * Token issuer (`https://cognito-idp.<region>.amazonaws.com/<poolId>`). The
+   * platform always emits it today, but manifests generated before it did exist
+   * in the wild — so it is OPTIONAL. When present the `id_token`'s `iss` is
+   * checked against it; when absent that one check is skipped and the rest of
+   * the login works unchanged.
    */
-  readonly issuer: string;
+  readonly issuer?: string;
   /** App Client provisioned for this component. */
   readonly clientId: string;
   /** Absolute callback URL, registered in the App Client. */
   readonly redirectUri: string;
-  /** Space-separated OAuth scopes. */
-  readonly scopes: string;
+  /** Space-separated OAuth scopes. Defaults to `openid email profile`. */
+  readonly scopes?: string;
   /** Federated identity providers enabled on the pool. */
   readonly identityProviders?: readonly string[];
   /**

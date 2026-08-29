@@ -272,7 +272,7 @@ describe('runtime.cognito', () => {
     expect(m.runtime?.cognito?.identityProviders).toBeUndefined();
   });
 
-  it.each(['domain', 'issuer', 'clientId', 'redirectUri', 'scopes'])(
+  it.each(['domain', 'clientId', 'redirectUri'])(
     'falha nomeando o campo quando "%s" falta — bloco pela metade é pior que nenhum',
     (campo) => {
       const parcial: Record<string, unknown> = { ...completo };
@@ -282,6 +282,27 @@ describe('runtime.cognito', () => {
       ).toThrow(new RegExp(`runtime\.cognito\.${campo}`));
     },
   );
+
+  it('aceita o formato ANTIGO, sem issuer nem identityProvider', () => {
+    // Regressão real: o manifesto do tpz-cel926-cmdb-jira-assets, em produção,
+    // foi gerado antes de a plataforma emitir `issuer`. Exigi-lo quebrava um
+    // conector no ar para ganhar uma checagem de claim que o `aud` já cobre.
+    const m = loadManifest({
+      name: 'tpz-cel926-cmdb-jira-assets',
+      kind: 'mcp',
+      allowedTools: [],
+      runtime: {
+        cognito: {
+          domain: 'https://topaz-cta-dev.auth.us-east-1.amazoncognito.com',
+          clientId: '5o9kpobp3c7kudnvm4onvjpgr0',
+          redirectUri: 'https://184rehq5t8.execute-api.us-east-1.amazonaws.com/auth/callback',
+          scopes: 'openid email profile',
+        },
+      },
+    } as never);
+    expect(m.runtime?.cognito?.clientId).toBe('5o9kpobp3c7kudnvm4onvjpgr0');
+    expect(m.runtime?.cognito?.issuer).toBeUndefined();
+  });
 
   it('recusa identityProviders que não seja array de strings', () => {
     expect(() =>

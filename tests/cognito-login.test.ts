@@ -145,6 +145,22 @@ describe('CognitoLogin.fromManifest', () => {
     expect(login).toBeInstanceOf(CognitoLogin);
   });
 
+  it('aceita o manifesto ANTIGO, sem issuer — o que está em produção hoje', () => {
+    // Validado contra o manifest.yaml real do tpz-cel926-cmdb-jira-assets.
+    // Sem issuer a checagem de `iss` não roda; o resto do login funciona igual.
+    const login = CognitoLogin.fromManifest(
+      manifesto({
+        domain: DOMAIN,
+        clientId: CLIENT_ID,
+        redirectUri: REDIRECT,
+        scopes: 'openid email profile',
+      }),
+      { env: {} },
+    );
+    expect(login.issuer).toBeUndefined();
+    expect(login.authorizeUrl({ state: 's', codeChallenge: 'c' })).toContain('response_type=code');
+  });
+
   it('lança quando o manifesto não tem runtime.cognito, apontando o passo que falta', () => {
     expect(() => CognitoLogin.fromManifest(manifesto(), { env: {} })).toThrow(
       /provisionar_cognito/,
