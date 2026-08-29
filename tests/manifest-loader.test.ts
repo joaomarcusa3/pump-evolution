@@ -235,46 +235,62 @@ describe('ManifestLoader — MCP kind (the CTA maps MCPs too)', () => {
   });
 });
 
+// ─── runtime.cognito — bloco que a Factory grava ao provisionar o login ───────
 
-// ─── runtime.models (snapshot do catálogo gravado pelo portal/MCP) ────────────
-
-describe('loadManifest — runtime.models', () => {
-  const base = {
-    name: 'weather-agent',
-    kind: 'agent' as const,
-    modelId: 'anthropic.claude-sonnet-4',
-    allowedTools: [] as string[],
+describe('runtime.cognito', () => {
+  const completo = {
+    domain: 'https://p.auth.us-east-1.amazoncognito.com',
+    issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC',
+    clientId: 'abc123',
+    redirectUri: 'https://app/auth/callback',
+    scopes: 'openid email profile',
   };
 
-  it('parses the available-models snapshot', () => {
+  it('preserva os campos que a plataforma emite, incluindo os opcionais', () => {
     const m = loadManifest({
-      ...base,
+      name: 'a',
+      kind: 'mcp',
+      allowedTools: [],
       runtime: {
-        models: [
-          { modelId: 'us.anthropic.claude-sonnet-4-6', name: 'Sonnet 4.6', provider: 'Anthropic', streaming: true },
-          { modelId: 'us.amazon.nova-pro-v1:0' },
-        ],
+        cognito: {
+          ...completo,
+          identityProviders: ['Microsoft'],
+          identityProvider: 'Microsoft',
+          logoutRedirectUri: 'https://app/bye',
+        },
       },
-    });
-    expect(m.runtime?.models).toHaveLength(2);
-    expect(m.runtime?.models?.[0]).toEqual({
-      modelId: 'us.anthropic.claude-sonnet-4-6',
-      name: 'Sonnet 4.6',
-      provider: 'Anthropic',
-      streaming: true,
-    });
-    expect(m.runtime?.models?.[1]).toEqual({ modelId: 'us.amazon.nova-pro-v1:0' });
+    } as never);
+    expect(m.runtime?.cognito?.issuer).toBe(completo.issuer);
+    expect(m.runtime?.cognito?.identityProvider).toBe('Microsoft');
+    expect(m.runtime?.cognito?.identityProviders).toEqual(['Microsoft']);
+    expect(m.runtime?.cognito?.logoutRedirectUri).toBe('https://app/bye');
   });
 
-  it('fails fast when a model entry is missing modelId', () => {
+  it('omite os opcionais ausentes em vez de preencher com placeholder', () => {
+    const m = loadManifest({ name: 'a', kind: 'mcp', allowedTools: [], runtime: { cognito: completo } } as never);
+    expect(m.runtime?.cognito?.identityProvider).toBeUndefined();
+    expect(m.runtime?.cognito?.identityProviders).toBeUndefined();
+  });
+
+  it.each(['domain', 'issuer', 'clientId', 'redirectUri', 'scopes'])(
+    'falha nomeando o campo quando "%s" falta — bloco pela metade é pior que nenhum',
+    (campo) => {
+      const parcial: Record<string, unknown> = { ...completo };
+      delete parcial[campo];
+      expect(() =>
+        loadManifest({ name: 'a', kind: 'mcp', allowedTools: [], runtime: { cognito: parcial } } as never),
+      ).toThrow(new RegExp(`runtime\.cognito\.${campo}`));
+    },
+  );
+
+  it('recusa identityProviders que não seja array de strings', () => {
     expect(() =>
-      loadManifest({ ...base, runtime: { models: [{ name: 'no id' }] } as never }),
-    ).toThrow(/runtime\.models\[0\]\.modelId/);
-  });
-
-  it('fails fast when runtime.models is not an array', () => {
-    expect(() => loadManifest({ ...base, runtime: { models: 'nope' } as never })).toThrow(
-      /runtime\.models" must be an array/,
-    );
+      loadManifest({
+        name: 'a',
+        kind: 'mcp',
+        allowedTools: [],
+        runtime: { cognito: { ...completo, identityProviders: 'Microsoft' } },
+      } as never),
+    ).toThrow(/runtime\.cognito\.identityProviders/);
   });
 });

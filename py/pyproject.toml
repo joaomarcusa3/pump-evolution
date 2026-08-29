@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pump-evolution"
-version = "0.0.3"
+version = "0.0.8"
 description = "Plug-and-play Python telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Python parity of @topaz-ia/pump-evolution. Zero internal cta-* dependencies."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -23,7 +23,22 @@ dependencies = [
 
 [project.optional-dependencies]
 bedrock = ["boto3>=1.34.0"]
-dev = ["pytest>=8.0", "mypy>=1.8", "ruff>=0.5", "types-PyYAML>=6.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.8",
+    "ruff>=0.5",
+    "types-PyYAML>=6.0",
+    # Os testes de instrumentacao MCP rodam contra o pacote real, nao um duplo.
+    # Marcador porque o `mcp` exige 3.10 e este pacote suporta 3.9 — la o teste
+    # se pula sozinho via `pytest.importorskip`.
+    "mcp>=1.20; python_version>='3.10'",
+    # O install() do CognitoLogin monta rotas em Starlette; o teste roda o fluxo
+    # de verdade em vez de simular o app. itsdangerous e do SessionMiddleware.
+    "starlette>=0.37",
+    "itsdangerous>=2.0",
+    "httpx>=0.27",
+]
 
 [project.urls]
 Homepage = "https://gitlab.topazevolution.com/topaz-ia/templates/sdk"
@@ -32,3 +47,7 @@ Repository = "https://gitlab.topazevolution.com/topaz-ia/templates/sdk.git"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pump_evolution*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

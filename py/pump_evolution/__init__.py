@@ -93,23 +93,23 @@ from .mcp_instrumentation import (
     trace_mcp_tool,
 )
 from .chat_recorder import OPERACAO_CHAT, record_chat
+from .core import PumpEvolution, PumpInitInternals, init
 from .managed_agent_client import (
     ManagedAgentClient,
     ManagedAgentInvokeError,
     ManagedAgentResult,
     build_agent_invoke_scope,
 )
-from .core import PumpEvolution, PumpInitInternals, init
 from .types import (
     AgentManifest,
     ComplianceFinding,
     ComplianceSummary,
     DataClassification,
     ItemKind,
+    ManifestOwner,
     ManifestCognito,
     ManifestManagedRuntime,
     ManifestModel,
-    ManifestOwner,
     ManifestRuntime,
     ManifestTelemetry,
     McpToolInvocation,
@@ -125,7 +125,7 @@ from .types import (
     UserContext,
 )
 
-__version__ = "0.0.3"
+__version__ = "0.0.8"
 
 __all__ = [
     "record_chat",
@@ -196,24 +196,24 @@ __all__ = [
     "ServiceAccountTokenProvider",
     "DEFAULT_TELEMETRY_SCOPE",
     "FetchResponse",
-    # managed runtime (invocação do runtime gerenciado)
-    "ManagedAgentClient",
-    "ManagedAgentInvokeError",
-    "ManagedAgentResult",
-    "build_agent_invoke_scope",
     "create_otlp_batch_processor",
     "ResilientAuthSpanExporter",
     "TelemetryLogger",
     "CircuitBreaker",
     "with_retry",
     "backoff_delay_ms",
+    # managed runtime (hospedagem opcional do agente externo, ADR-0068)
+    "ManagedAgentClient",
+    "ManagedAgentInvokeError",
+    "ManagedAgentResult",
+    "build_agent_invoke_scope",
     # types
     "AgentManifest",
     "PumpConfig",
     "PumpHandle",
     "ServiceAccountCredentials",
-    "ManifestCognito",
     "ManifestOwner",
+    "ManifestCognito",
     "ManifestRuntime",
     "ManifestManagedRuntime",
     "ManifestModel",

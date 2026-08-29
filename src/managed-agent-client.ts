@@ -5,8 +5,11 @@
  * Diferente do resto do SDK, esta é uma capacidade **ativa** (não observacional):
  * o agente do desenvolvedor deixa de rodar um runtime próprio e passa a **chamar**
  * o runtime de PRD da plataforma (na conta de tooling) por HTTPS + OAuth. O "cérebro"
- * (prompt + modelo + tools) e o catálogo de modelos são da plataforma; o dev só
- * manda mensagem e recebe resposta. Funciona de **qualquer conta AWS, region ou
+ * (prompt + tools) é da plataforma; o dev manda mensagem e recebe resposta, e pode
+ * OPCIONALMENTE escolher dinamicamente, por invocação, qual modelo do catálogo do
+ * tenant (`modelId` — ver {@link ManagedAgentInvocation.modelId}) deve processá-la —
+ * nunca um modelo próprio do agente externo. Sem esse override, a plataforma usa o
+ * `modelId` fixo configurado para o agente. Funciona de **qualquer conta AWS, region ou
  * cloud** — não requer credencial AWS no lado do dev, só o par client-credentials
  * do Cognito.
  *
@@ -99,6 +102,16 @@ export interface ManagedAgentInvocation {
    * atribuída apenas à identidade de máquina.
    */
   readonly userToken?: string;
+  /**
+   * Override de modelo para esta invocação — o agente externo escolhe
+   * dinamicamente entre os modelos habilitados no catálogo do tenant na conta
+   * Tooling (nunca um modelo próprio do agente externo). Opcional: quando
+   * omitido, a plataforma usa o `modelId` fixo configurado para o agente no
+   * registro. Um `modelId` fora do allowlist do tenant é rejeitado
+   * fail-closed pela plataforma (`ManagedAgentInvokeError`), nunca cai de
+   * volta ao modelo padrão do agente silenciosamente.
+   */
+  readonly modelId?: string;
 }
 
 /**
@@ -114,6 +127,8 @@ export interface ManagedAgentResult {
   readonly outputTokens?: number;
   readonly costUsd?: number;
   readonly correlationId?: string;
+  /** Modelo efetivamente usado nesta invocação (override da requisição ou o fixo do agente). */
+  readonly modelId?: string;
   /** Corpo bruto da resposta (para campos não normalizados). */
   readonly raw: Record<string, unknown>;
 }
@@ -297,6 +312,7 @@ export class ManagedAgentClient {
     const body = JSON.stringify({
       message,
       ...(invocation.sessionId !== undefined ? { sessionId: invocation.sessionId } : {}),
+      ...(invocation.modelId !== undefined ? { modelId: invocation.modelId } : {}),
     });
 
     const response = await this.sendInvoke(headers, body);
@@ -388,6 +404,7 @@ function toResult(parsed: Record<string, unknown>): ManagedAgentResult {
   const outputTokens = readNumber(parsed.outputTokens);
   const costUsd = readNumber(parsed.costUsd);
   const correlationId = readString(parsed.correlationId);
+  const modelId = readString(parsed.modelId);
   return {
     reply,
     ...(sessionId !== undefined ? { sessionId } : {}),
@@ -396,6 +413,7 @@ function toResult(parsed: Record<string, unknown>): ManagedAgentResult {
     ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
     ...(correlationId !== undefined ? { correlationId } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
     raw: parsed,
   };
 }

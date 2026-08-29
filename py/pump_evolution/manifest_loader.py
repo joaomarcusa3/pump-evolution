@@ -32,10 +32,10 @@ from .constants import (
 from .types import (
     CTA_ITEM_KIND,
     AgentManifest,
+    ManifestOwner,
     ManifestCognito,
     ManifestManagedRuntime,
     ManifestModel,
-    ManifestOwner,
     ManifestRuntime,
     ManifestTelemetry,
     ResourceAttributes,
@@ -184,7 +184,26 @@ def _parse_telemetry(value: Any, origin: str) -> Optional[ManifestTelemetry]:
     return ManifestTelemetry(otel_endpoint=otel_endpoint, service_account_id=service_account_id)
 
 
+def _optional_string_list(value: Any, field: str, origin: str) -> Optional[list]:
+    """Lista opcional de strings não-vazias. Ausente e vazia querem dizer o
+    mesmo: nenhum IdP federado no pool."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        _fail(origin, f'field "{field}" must be an array when present, got {_describe_type(value)}.')
+    return [
+        _require_non_empty_string(item, f"{field}[{i}]", origin) for i, item in enumerate(value)
+    ]
+
+
 def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
+    """Bloco `runtime.cognito`, escrito pela plataforma ao provisionar o login.
+
+    Os cinco primeiros campos são OBRIGATÓRIOS quando o bloco existe. Um bloco
+    pela metade é pior que nenhum: o login falharia depois, no Hosted UI, com
+    mensagem opaca — em vez de aqui, no load, nomeando o campo. A plataforma
+    recusa emitir o bloco sem eles, então um parcial significa edição à mão.
+    """
     if value is None:
         return None
     if not _is_record(value):
@@ -192,25 +211,33 @@ def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
             origin,
             f'field "runtime.cognito" must be an object when present, got {_describe_type(value)}.',
         )
-    domain = _require_non_empty_string(value.get("domain"), "runtime.cognito.domain", origin)
-    client_id = _require_non_empty_string(value.get("clientId"), "runtime.cognito.clientId", origin)
-    redirect_uri = _require_non_empty_string(
-        value.get("redirectUri"), "runtime.cognito.redirectUri", origin
-    )
-    scopes = _optional_non_empty_string(value.get("scopes"), "runtime.cognito.scopes", origin)
-    logout_redirect_uri = _optional_non_empty_string(
-        value.get("logoutRedirectUri"), "runtime.cognito.logoutRedirectUri", origin
-    )
     return ManifestCognito(
-        domain=domain,
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        logout_redirect_uri=logout_redirect_uri,
+        domain=_require_non_empty_string(value.get("domain"), "runtime.cognito.domain", origin),
+        issuer=_require_non_empty_string(value.get("issuer"), "runtime.cognito.issuer", origin),
+        client_id=_require_non_empty_string(
+            value.get("clientId"), "runtime.cognito.clientId", origin
+        ),
+        redirect_uri=_require_non_empty_string(
+            value.get("redirectUri"), "runtime.cognito.redirectUri", origin
+        ),
+        scopes=_require_non_empty_string(value.get("scopes"), "runtime.cognito.scopes", origin),
+        identity_providers=_optional_string_list(
+            value.get("identityProviders"), "runtime.cognito.identityProviders", origin
+        ),
+        identity_provider=_optional_non_empty_string(
+            value.get("identityProvider"), "runtime.cognito.identityProvider", origin
+        ),
+        logout_redirect_uri=_optional_non_empty_string(
+            value.get("logoutRedirectUri"), "runtime.cognito.logoutRedirectUri", origin
+        ),
     )
 
 
 def _parse_managed(value: Any, origin: str) -> Optional[ManifestManagedRuntime]:
+    """Bloco `runtime.managed`, escrito pelo portal/MCP quando um agente externo
+    opta pela hospedagem no runtime AgentCore gerenciado. Os três campos são
+    OBRIGATÓRIOS quando o bloco existe — mesma regra de "sem bloco pela metade"
+    do `runtime.cognito`."""
     if value is None:
         return None
     if not _is_record(value):
@@ -227,7 +254,28 @@ def _parse_managed(value: Any, origin: str) -> Optional[ManifestManagedRuntime]:
     )
 
 
+def _parse_model_entry(value: Any, index: int, origin: str) -> ManifestModel:
+    if not _is_record(value):
+        _fail(
+            origin,
+            f'field "runtime.models[{index}]" must be an object, got {_describe_type(value)}.',
+        )
+    model_id = _require_non_empty_string(
+        value.get("modelId"), f"runtime.models[{index}].modelId", origin
+    )
+    name = _optional_non_empty_string(value.get("name"), f"runtime.models[{index}].name", origin)
+    provider = _optional_non_empty_string(
+        value.get("provider"), f"runtime.models[{index}].provider", origin
+    )
+    streaming = _optional_boolean(
+        value.get("streaming"), f"runtime.models[{index}].streaming", origin
+    )
+    return ManifestModel(model_id=model_id, name=name, provider=provider, streaming=streaming)
+
+
 def _parse_models(value: Any, origin: str) -> Optional[List[ManifestModel]]:
+    """Snapshot de `runtime.models`, escrito pelo portal a partir do catálogo
+    Bedrock ao vivo — não é lista estática mantida à mão."""
     if value is None:
         return None
     if not isinstance(value, list):
@@ -235,27 +283,7 @@ def _parse_models(value: Any, origin: str) -> Optional[List[ManifestModel]]:
             origin,
             f'field "runtime.models" must be an array when present, got {_describe_type(value)}.',
         )
-    models: List[ManifestModel] = []
-    for index, item in enumerate(value):
-        if not _is_record(item):
-            _fail(
-                origin,
-                f'field "runtime.models[{index}]" must be an object, got {_describe_type(item)}.',
-            )
-        model_id = _require_non_empty_string(
-            item.get("modelId"), f"runtime.models[{index}].modelId", origin
-        )
-        name = _optional_non_empty_string(item.get("name"), f"runtime.models[{index}].name", origin)
-        provider = _optional_non_empty_string(
-            item.get("provider"), f"runtime.models[{index}].provider", origin
-        )
-        streaming = _optional_boolean(
-            item.get("streaming"), f"runtime.models[{index}].streaming", origin
-        )
-        models.append(
-            ManifestModel(model_id=model_id, name=name, provider=provider, streaming=streaming)
-        )
-    return models
+    return [_parse_model_entry(item, index, origin) for index, item in enumerate(value)]
 
 
 def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:

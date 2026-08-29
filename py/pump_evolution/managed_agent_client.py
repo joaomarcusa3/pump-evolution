@@ -6,9 +6,12 @@ AgentCore gerenciado da plataforma** ("hospedagem opcional"). Paridade 1:1 com
 Diferente do resto do SDK, esta é uma capacidade **ativa** (não observacional): o
 agente do desenvolvedor deixa de rodar um runtime próprio e passa a **chamar** o
 runtime de PRD da plataforma (na conta de tooling) por HTTPS + OAuth. O "cérebro"
-(prompt + modelo + tools) e o catálogo de modelos são da plataforma; o dev só manda
-mensagem e recebe resposta. Funciona de **qualquer conta AWS, region ou cloud** —
-não requer credencial AWS no lado do dev, só o par client-credentials do Cognito.
+(prompt + tools) é da plataforma; o dev manda mensagem e recebe resposta, e pode
+OPCIONALMENTE escolher dinamicamente, por invocação, qual modelo do catálogo do
+tenant (``model_id``) deve processá-la — nunca um modelo próprio do agente
+externo. Sem esse override, a plataforma usa o ``modelId`` fixo configurado para
+o agente. Funciona de **qualquer conta AWS, region ou cloud** — não requer
+credencial AWS no lado do dev, só o par client-credentials do Cognito.
 
 Autenticação: token de **máquina** (service account, client-credentials) com o scope
 de invoke `cta-consumers/invoke:agent:<agent_id>` — reusa o mesmo
@@ -74,6 +77,7 @@ class ManagedAgentResult:
     output_tokens: Optional[float] = None
     cost_usd: Optional[float] = None
     correlation_id: Optional[str] = None
+    model_id: Optional[str] = None
 
 
 # ─── Narrowing ────────────────────────────────────────────────────────────────
@@ -243,10 +247,19 @@ class ManagedAgentClient:
         message: str,
         session_id: Optional[str] = None,
         user_token: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> ManagedAgentResult:
         """Invoca o agente gerenciado. Autentica com o token de máquina, propaga a
         identidade do usuário (quando fornecida) e retorna a resposta normalizada.
-        **Lança** :class:`ManagedAgentInvokeError` em falha (não degrada em silêncio)."""
+        **Lança** :class:`ManagedAgentInvokeError` em falha (não degrada em silêncio).
+
+        ``model_id``: override de modelo para esta invocação — o agente externo
+        escolhe dinamicamente entre os modelos habilitados no catálogo do tenant
+        na conta Tooling (nunca um modelo próprio do agente externo). Opcional:
+        quando omitido, a plataforma usa o ``modelId`` fixo configurado para o
+        agente no registro. Um ``model_id`` fora do allowlist do tenant é
+        rejeitado fail-closed pela plataforma (:class:`ManagedAgentInvokeError`),
+        nunca cai de volta ao modelo padrão do agente silenciosamente."""
         message = _require_non_empty(message, "message")
         token = await self._token_provider.get_token()
 
@@ -262,6 +275,8 @@ class ManagedAgentClient:
         payload: Dict[str, Any] = {"message": message}
         if session_id is not None:
             payload["sessionId"] = session_id
+        if model_id is not None:
+            payload["modelId"] = model_id
         body = json.dumps(payload)
 
         try:
@@ -322,4 +337,5 @@ def _to_result(parsed: Dict[str, Any]) -> ManagedAgentResult:
         output_tokens=_read_number(parsed.get("outputTokens")),
         cost_usd=_read_number(parsed.get("costUsd")),
         correlation_id=_read_string(parsed.get("correlationId")),
+        model_id=_read_string(parsed.get("modelId")),
     )

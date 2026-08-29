@@ -40,11 +40,11 @@ export type {
   SecurityConfig,
 } from './bedrock-instrumentation.js';
 export { traceMcpTool, instrumentMcpServer } from './mcp-instrumentation.js';
+export { CognitoLogin, safeNextPath } from './cognito-login.js';
+export type { CognitoFetchLike, CognitoLoginConfig, CallbackResult, Pkce } from './cognito-login.js';
 export type { McpToolTracerDeps } from './mcp-instrumentation.js';
 export { ConsumerTokenVerifier } from './consumer-auth.js';
 export type { ConsumerAuthConfig, ConsumerAuthResult, JwksFetchLike } from './consumer-auth.js';
-export { CognitoLogin } from './cognito-login.js';
-export type { CallbackResult, CognitoFetchLike, CognitoLoginConfig, Pkce } from './cognito-login.js';
 export { init, PumpEvolution } from './pump-evolution.js';
 export type { PumpInitInternals } from './pump-evolution.js';
 export {
@@ -90,6 +90,8 @@ export type {
   ManagedAgentServiceAccount,
 } from './managed-agent-client.js';
 export { backoffDelayMs, CircuitBreaker, withRetry } from './resilience.js';
+export { CHAT_OPERATION, recordChat } from './chat-recorder.js';
+export type { RecordChatInput } from './chat-recorder.js';
 export type { CircuitBreakerOptions, CircuitState, RetryOptions } from './resilience.js';
 export { createOtlpBatchProcessor, ResilientAuthSpanExporter } from './otlp-exporter.js';
 export type {
@@ -106,8 +108,8 @@ export type {
   ComplianceSummary,
   DataClassification,
   ItemKind,
-  ManifestCognito,
   ManifestOwner,
+  ManifestCognito,
   ManifestRuntime,
   ManifestManagedRuntime,
   ManifestModel,

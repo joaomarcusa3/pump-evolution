@@ -123,6 +123,41 @@ describe('ManagedAgentClient.invoke', () => {
     expect(calls[1]!.headers['x-cta-enduser-authorization']).toBeUndefined();
   });
 
+  it('inclui modelId no corpo da requisição quando fornecido', async () => {
+    const { fetchImpl, calls } = fakeFetch([TOKEN_OK, { body: JSON.stringify({ reply: 'ok' }) }]);
+    const client = new ManagedAgentClient({ ...BASE, fetchImpl });
+
+    await client.invoke({ message: 'oi', modelId: 'us.amazon.nova-pro-v1:0' });
+
+    expect(JSON.parse(calls[1]!.body)).toEqual({
+      message: 'oi',
+      modelId: 'us.amazon.nova-pro-v1:0',
+    });
+  });
+
+  it('não inclui modelId no corpo quando omitido (regressão — comportamento atual preservado)', async () => {
+    const { fetchImpl, calls } = fakeFetch([TOKEN_OK, { body: JSON.stringify({ reply: 'ok' }) }]);
+    const client = new ManagedAgentClient({ ...BASE, fetchImpl });
+
+    await client.invoke({ message: 'oi', sessionId: 'sess-9' });
+
+    const body = JSON.parse(calls[1]!.body);
+    expect(body).toEqual({ message: 'oi', sessionId: 'sess-9' });
+    expect(body).not.toHaveProperty('modelId');
+  });
+
+  it('normaliza modelId da resposta em ManagedAgentResult', async () => {
+    const { fetchImpl } = fakeFetch([
+      TOKEN_OK,
+      { body: JSON.stringify({ reply: 'ok', modelId: 'us.amazon.nova-pro-v1:0' }) },
+    ]);
+    const client = new ManagedAgentClient({ ...BASE, fetchImpl });
+
+    const result = await client.invoke({ message: 'oi', modelId: 'us.amazon.nova-pro-v1:0' });
+
+    expect(result.modelId).toBe('us.amazon.nova-pro-v1:0');
+  });
+
   it('lança ManagedAgentInvokeError com status e corpo em resposta não-2xx', async () => {
     const { fetchImpl } = fakeFetch([
       TOKEN_OK,

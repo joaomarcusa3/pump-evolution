@@ -67,6 +67,9 @@ export type CallbackResult = {
 };
 
 // @public
+export const CHAT_OPERATION: "chat";
+
+// @public
 export function checkDataClassificationGuardrail(dataClassification: DataClassification | undefined, hasGuardrailEvidence: boolean | undefined): ComplianceFinding[];
 
 // @public
@@ -99,6 +102,7 @@ export type CognitoFetchLike = (input: string, init?: {
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    signal?: AbortSignal;
 }) => Promise<{
     ok: boolean;
     status: number;
@@ -114,22 +118,27 @@ export class CognitoLogin {
     }): string;
     createPkce(): Pkce;
     createState(): string;
-    exchangeCode(code: string, codeVerifier: string): Promise<Record<string, unknown> | undefined>;
+    exchangeCode(code: string, codeVerifier: string): Promise<{
+        readonly ok: true;
+        readonly tokens: Record<string, unknown>;
+    } | {
+        readonly ok: false;
+        readonly reason: string;
+    }>;
     expressRoutes(): {
         login: (req: ExpressLikeReq, res: ExpressLikeRes) => void;
         callback: (req: ExpressLikeReq, res: ExpressLikeRes) => Promise<void>;
         logout: (req: ExpressLikeReq, res: ExpressLikeRes) => void;
     };
-    static fromEnv(env?: Record<string, string | undefined>): CognitoLogin;
-    static fromManifest(source: string | AgentManifest, options?: {
-        readonly clientSecret?: string;
-        readonly fetchImpl?: CognitoFetchLike;
+    static fromEnv(env?: Record<string, string | undefined>, overrides?: Partial<CognitoLoginConfig>): CognitoLogin;
+    static fromManifest(manifest: string | AgentManifest, overrides?: Partial<CognitoLoginConfig> & {
         readonly env?: Record<string, string | undefined>;
     }): CognitoLogin;
     handleCallback(args: {
         code: string;
         codeVerifier: string;
     }): Promise<CallbackResult>;
+    get issuer(): string | undefined;
     logoutUrl(): string | undefined;
     userContextFromIdToken(idToken: string | undefined): UserContext;
 }
@@ -140,7 +149,11 @@ export interface CognitoLoginConfig {
     readonly clientSecret?: string;
     readonly domain: string;
     readonly fetchImpl?: CognitoFetchLike;
+    readonly identityProvider?: string;
+    readonly issuer?: string;
+    readonly logger?: TelemetryLogger;
     readonly logoutRedirectUri?: string;
+    readonly now?: () => number;
     readonly redirectUri: string;
     readonly scopes?: string;
 }
@@ -434,6 +447,7 @@ export interface ManagedAgentClientConfig {
 // @public
 export interface ManagedAgentInvocation {
     readonly message: string;
+    readonly modelId?: string;
     readonly sessionId?: string;
     readonly userToken?: string;
 }
@@ -460,6 +474,7 @@ export interface ManagedAgentResult {
     readonly inputTokens?: number;
     // (undocumented)
     readonly latencyMs?: number;
+    readonly modelId?: string;
     // (undocumented)
     readonly outputTokens?: number;
     readonly raw: Record<string, unknown>;
@@ -480,9 +495,12 @@ export interface ManagedAgentServiceAccount {
 export interface ManifestCognito {
     readonly clientId: string;
     readonly domain: string;
+    readonly identityProvider?: string;
+    readonly identityProviders?: readonly string[];
+    readonly issuer: string;
     readonly logoutRedirectUri?: string;
     readonly redirectUri: string;
-    readonly scopes?: string;
+    readonly scopes: string;
 }
 
 // @public
@@ -513,6 +531,7 @@ export interface ManifestOwner {
 
 // @public
 export interface ManifestRuntime {
+    // (undocumented)
     readonly cognito?: ManifestCognito;
     // (undocumented)
     readonly external?: boolean;
@@ -595,7 +614,7 @@ export const PROVIDER_AWS_BEDROCK: "aws.bedrock";
 // @public
 export const PUMP_EVOLUTION_ENABLED_ENV: "PUMP_EVOLUTION_ENABLED";
 
-// @public
+// @public (undocumented)
 export interface PumpConfig {
     readonly enabled?: boolean;
     readonly endpoint?: string;
@@ -632,6 +651,19 @@ export interface PumpInitInternals {
     readonly register?: boolean;
     readonly setTimeoutFn?: (fn: () => void, ms: number) => unknown;
     readonly spanProcessors?: readonly SpanProcessor[];
+}
+
+// @public
+export function recordChat(input: RecordChatInput): boolean;
+
+// @public (undocumented)
+export interface RecordChatInput {
+    readonly error?: unknown;
+    readonly inputTokens?: number | undefined;
+    readonly model: string;
+    readonly outputTokens?: number | undefined;
+    readonly provider?: string | undefined;
+    readonly tracer?: Tracer | undefined;
 }
 
 // @public
@@ -714,6 +746,9 @@ export interface RetryOptions {
 
 // @public
 export type RiskTier = 'T1-low' | 'T2-medium' | 'T3-sensitive' | 'T4-autonomous';
+
+// @public
+export function safeNextPath(value: unknown): string;
 
 // @public
 export interface SecurityConfig {
@@ -864,8 +899,8 @@ export function withUser<T>(ctx: UserContext, fn: () => T): T;
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:1245:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:1245:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1255:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1255:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
