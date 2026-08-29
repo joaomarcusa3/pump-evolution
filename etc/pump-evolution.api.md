@@ -420,10 +420,10 @@ export interface ManifestCognito {
     readonly domain: string;
     readonly identityProvider?: string;
     readonly identityProviders?: readonly string[];
-    readonly issuer: string;
+    readonly issuer?: string;
     readonly logoutRedirectUri?: string;
     readonly redirectUri: string;
-    readonly scopes: string;
+    readonly scopes?: string;
 }
 
 // @public
@@ -804,8 +804,8 @@ export function withUser<T>(ctx: UserContext, fn: () => T): T;
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:1203:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:1203:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1206:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1206:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

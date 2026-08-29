@@ -263,8 +263,8 @@ export class CognitoLogin {
       domain: cognito.domain,
       clientId: cognito.clientId,
       redirectUri: cognito.redirectUri,
-      issuer: cognito.issuer,
-      scopes: cognito.scopes,
+      ...(cognito.issuer !== undefined ? { issuer: cognito.issuer } : {}),
+      ...(cognito.scopes !== undefined ? { scopes: cognito.scopes } : {}),
       ...(cognito.identityProvider !== undefined
         ? { identityProvider: cognito.identityProvider }
         : {}),

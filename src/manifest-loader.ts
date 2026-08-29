@@ -228,11 +228,14 @@ function optionalStringArray(value: unknown, field: string, origin: string): str
  * End-user login block (`runtime.cognito`), written by the platform when the App
  * Client is provisioned.
  *
- * `domain`, `issuer`, `clientId`, `redirectUri` and `scopes` are REQUIRED once
- * the block exists. A half-written block is worse than none: the login would
- * fail later at the Hosted UI with an opaque message, instead of here, at load
- * time, naming the field. The platform refuses to emit the block without them,
- * so a partial one means someone edited it by hand.
+ * `domain`, `clientId` and `redirectUri` are REQUIRED once the block exists —
+ * without any of them the login points nowhere, and failing here (naming the
+ * field) beats failing later at the Hosted UI with an opaque message.
+ *
+ * `issuer` and `scopes` are OPTIONAL, and that is deliberate: manifests written
+ * before the platform started emitting `issuer` are deployed and working right
+ * now. Rejecting them would break a connector in production to gain one extra
+ * claim check, while `aud` already binds the token to this App Client.
  */
 function parseCognito(value: unknown, origin: string): ManifestCognito | undefined {
   if (value === undefined || value === null) return undefined;
@@ -259,10 +262,14 @@ function parseCognito(value: unknown, origin: string): ManifestCognito | undefin
   );
   return {
     domain: requireNonEmptyString(value.domain, 'runtime.cognito.domain', origin),
-    issuer: requireNonEmptyString(value.issuer, 'runtime.cognito.issuer', origin),
+    ...(optionalNonEmptyString(value.issuer, 'runtime.cognito.issuer', origin) !== undefined
+      ? { issuer: optionalNonEmptyString(value.issuer, 'runtime.cognito.issuer', origin)! }
+      : {}),
     clientId: requireNonEmptyString(value.clientId, 'runtime.cognito.clientId', origin),
     redirectUri: requireNonEmptyString(value.redirectUri, 'runtime.cognito.redirectUri', origin),
-    scopes: requireNonEmptyString(value.scopes, 'runtime.cognito.scopes', origin),
+    ...(optionalNonEmptyString(value.scopes, 'runtime.cognito.scopes', origin) !== undefined
+      ? { scopes: optionalNonEmptyString(value.scopes, 'runtime.cognito.scopes', origin)! }
+      : {}),
     ...(identityProviders !== undefined ? { identityProviders } : {}),
     ...(identityProvider !== undefined ? { identityProvider } : {}),
     ...(logoutRedirectUri !== undefined ? { logoutRedirectUri } : {}),

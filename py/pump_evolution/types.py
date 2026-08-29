@@ -72,10 +72,13 @@ class ManifestCognito:
     """
 
     domain: str
-    issuer: str
     client_id: str
     redirect_uri: str
-    scopes: str
+    #: A plataforma sempre emite hoje, mas manifestos gerados antes disso estao
+    #: em producao — por isso e OPCIONAL. Presente, o `iss` do id_token e
+    #: conferido contra ele; ausente, so essa checagem nao roda.
+    issuer: Optional[str] = None
+    scopes: Optional[str] = None
     identity_providers: Optional[Sequence[str]] = None
     #: Só sai quando o pool tem EXATAMENTE UM federado — com dois ou mais,
     #: adivinhar mandaria o usuário para o SSO errado. A ausência é informação.

@@ -7,6 +7,42 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-08-28
+
+### Fixed
+
+- **`runtime.cognito` exigia `issuer` e rejeitava manifesto que está em
+  produção.** Validando a 0.0.8 contra o `manifest.yaml` real do
+  `tpz-cel926-cmdb-jira-assets`, o `fromManifest()` lançou: aquele bloco foi
+  gerado antes de a plataforma passar a emitir `issuer`, e eu havia tornado os
+  cinco campos obrigatórios.
+
+  Agora só `domain`, `clientId` e `redirectUri` são obrigatórios — sem eles o
+  login aponta para lugar nenhum. `issuer` e `scopes` são opcionais: o primeiro
+  só habilita a checagem de `iss` (que o `aud` já cobre em boa parte, amarrando o
+  token ao App Client), e o segundo tem default. Recusar o bloco antigo quebraria
+  um conector no ar para ganhar uma checagem a mais.
+
+  Teste de regressão nas duas linguagens, com o formato exato do manifesto que
+  está deployado.
+
+### Verificado
+
+Validação ponta a ponta contra o Cognito real (pool `us-east-1_5ppMHdWW7`, conta
+166488239644), confrontando o que o SDK gera com o App Client provisionado:
+
+| | |
+| --- | --- |
+| `authorization_endpoint` do discovery | idêntico à URL que o SDK monta do `domain` |
+| `AllowedOAuthFlows` | `['code']` — bate com `response_type=code` |
+| `CallbackURLs` | exatamente o `redirect_uri` que o SDK envia |
+| `ClientSecret` | `null` — client público, e o SDK não manda Basic auth |
+| `AllowedOAuthScopes` | `email openid profile` — bate com o `scope` enviado |
+
+O `scopes_supported` do discovery inclui `phone`, que o App Client **não** aceita.
+O SDK escapa disso por usar os scopes do manifesto (os do client) e nunca os do
+discovery — é a mesma pegadinha que derruba proxies OAuth com `invalid_scope`.
+
 ## [0.0.8] - 2026-08-28
 
 ### Added
