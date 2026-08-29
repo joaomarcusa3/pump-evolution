@@ -4,13 +4,10 @@
 
 name: <CANONICAL_NAME>        # ex: tpz-cel926-meu-agente-001
 kind: agent                    # agent (tem LLM) | mcp (só tools, sem modelo)
-modelId: <INFERENCE_PROFILE>   # Obrigatório pra kind=agent. Use um ID do CATÁLOGO DINÂMICO
-                               # da plataforma — só os modelos HABILITADOS nesta conta/região.
-                               # NÃO copie um ID de memória: IDs de modelo envelhecem e o
-                               # Bedrock pode não servir mais o que estiver fixo aqui. O
-                               # catálogo é acessado via API pelo SDK (o dev escolhe o modelo
-                               # a partir dele). É o modelo "principal" declarado — cada
-                               # invocação real reporta o modelo correto nos spans.
+modelId: <INFERENCE_PROFILE>   # ex: us.anthropic.claude-sonnet-4-20250514-v1:0
+                               # Obrigatório pra kind=agent. É o modelo "principal"
+                               # declarado — cada invocação real reporta o modelo
+                               # correto dinamicamente nos spans.
 riskTier: T3-sensitive         # T1-low | T2-medium | T3-sensitive | T4-autonomous
 dataClassification: sensitive  # public | internal | sensitive
 
@@ -23,32 +20,3 @@ runtime:
   telemetry:
     otelEndpoint: <otelEndpoint — pegue na aba SDK & Telemetria do componente>
     serviceAccountId: <CLIENT_ID_DO_SERVICE_ACCOUNT>
-  # Login do usuário (Cognito de usuário da plataforma). Provisionado pelo
-  # portal/MCP no install e gravado AQUI — o SDK lê com CognitoLogin.fromManifest().
-  # NÃO contém secret: o COGNITO_CLIENT_SECRET (client confidencial) fica só no
-  # .env / Secrets Manager, nunca no manifesto/git.
-  cognito:
-    domain: <https://<prefixo>.auth.<region>.amazoncognito.com>
-    clientId: <APP_CLIENT_ID_DO_LOGIN>
-    redirectUri: <https://<seu-app>/auth/callback — registrado no App Client>
-    scopes: openid email profile          # opcional
-    logoutRedirectUri: <https://<seu-app>/>  # opcional
-  # Runtime GERENCIADO (opcional, opt-in): só se o agente for HOSPEDADO no runtime
-  # de PRD da plataforma (em vez de rodar runtime próprio). Provisionado pelo
-  # portal/MCP e gravado AQUI — o SDK lê com ManagedAgentClient.fromManifest().
-  # SEM secret: a credencial de invoke (clientId + clientSecret) fica só no .env /
-  # Secrets Manager (PUMP_MANAGED_CLIENT_ID / PUMP_MANAGED_CLIENT_SECRET).
-  managed:
-    endpoint: <https://<cta>/api/agents/<agentId>/invoke>
-    agentId: <AGENT_ID_NO_REGISTRO>
-    tokenUrl: <https://<cognito>/oauth2/token>
-    scope: <cta-consumers/invoke:agent:<agentId>>  # opcional (derivado do agentId)
-  # Modelos disponíveis — SNAPSHOT que o portal/MCP grava a partir do catálogo vivo
-  # do Bedrock (só os habilitados nesta conta/região). NÃO é lista digitada à mão:
-  # é regravada no install/update. O SDK entrega essa lista ao dev; a validação
-  # autoritativa segue na API/runtime.
-  models:
-    - modelId: <us.anthropic.claude-sonnet-4-6>
-      name: <Claude Sonnet 4.6>
-      provider: <Anthropic>
-      streaming: true

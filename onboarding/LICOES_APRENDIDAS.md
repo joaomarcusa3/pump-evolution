@@ -9,65 +9,23 @@
 O `instrument_bedrock()` do SDK já emite no formato correto. Pra providers
 manuais, SEMPRE setar `gen_ai.operation.name = "chat"`.
 
-## 2. Duas identidades — e o login do usuário passa a viver na plataforma
+## 2. Dois Cognitos, zero conflito
 
-> **Mudou em relação ao primeiro onboarding.** Antes a regra era "não mexa no
-> Cognito do agente". Ela não sobreviveu ao contato com a realidade: os claims de
-> custo (`custom:department`, `custom:cost_center`) dependiam de como cada cliente
-> tinha configurado o Cognito dele — e quase nunca vinham. O span saía com o
-> usuário certo e **sem departamento**, ou seja, sem a atribuição de custo, que é
-> a razão de tudo isto existir.
-
-O **login dos usuários do agente passa a usar um User Pool Cognito provisionado na
-conta de tooling da plataforma** — um App Client por agente, criado no *install*
-via Factory API (não no registro). É esse pool que carrega os claims de custo
-governados. O agente **troca o login dele para esse pool**, mesmo que já tivesse
-Cognito próprio: se não tinha, cria; se tinha, cria na tooling e usa o novo.
-
-Separado disso, o **envio de telemetria** continua usando um service account M2M
-(`client_credentials`) — outra credencial, também da plataforma. As duas coisas
-não se misturam:
+O agente pode usar QUALQUER Cognito/IdP pro login dos seus usuários.
+O SDK usa um service account M2M separado (Cognito do CTA) só pra enviar telemetria.
+Nunca precisamos federar, criar trust, ou mudar configuração em nenhum pool.
 
 ```
-Cognito de usuário (tooling)   → autentica o USUÁRIO (authorization_code + PKCE),
-                                  carrega custom:department / custom:cost_center
-Service account M2M (plataforma) → autentica a MÁQUINA que ENVIA telemetria
+Cognito do Agente → autentica o USUÁRIO (login/SSO)
+Cognito do CTA    → autentica a MÁQUINA (service account M2M)
 ```
 
-O wiring do login é uma chamada só, com o módulo pronto do SDK:
+## 3. Department vem do id_token, não do grupo interno
 
-```python
-# Python (FastAPI/Starlette)
-from pump_evolution.integrations.cognito import CognitoLogin
-from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
-
-login = CognitoLogin.from_env()            # lê COGNITO_* do provisionamento
-login.install(app)                         # monta /auth/login, /auth/callback, /auth/logout
-app.add_middleware(
-    PumpIdentityMiddleware,
-    user_resolver=login.user_resolver,
-    id_token_resolver=login.id_token_resolver,
-)
-```
-
-```ts
-// Node (Express + express-session)
-import { CognitoLogin } from '@topaz-ia/pump-evolution';
-const login = CognitoLogin.fromEnv();
-const routes = login.expressRoutes();
-app.get('/auth/login', routes.login);
-app.get('/auth/callback', routes.callback);
-app.get('/auth/logout', routes.logout);
-// por requisição: pump.withUser(login.userContextFromIdToken(req.session.pumpIdToken), () => handler())
-```
-
-## 3. Department vem do id_token do pool da tooling, não do grupo interno
-
-O `group_name` do app (ex: "Administrador") é o grupo de ACESSO interno — **não** é
-o departamento. O departamento real vem do `custom:department` no id_token emitido
-pelo **pool da tooling**, que a plataforma governa. O middleware lê o id_token
-guardado na sessão, decodifica (sem validar assinatura — já foi validado no login)
-e extrai os claims.
+O `group_name` do app (ex: "Administrador") é o grupo de ACESSO interno.
+O `custom:department` no id_token do Cognito é o departamento REAL do usuário.
+O middleware lê o JWT guardado, decodifica (sem validar — já foi validado no login)
+e extrai os claims custom.
 
 Claims suportados:
 - `custom:department` ou `custom:topaz_directorate` → `cta.department`

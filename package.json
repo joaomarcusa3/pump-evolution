@@ -1,6 +1,7 @@
 {
   "name": "@topaz-ia/pump-evolution",
-  "version": "0.0.3",
+  "version": "0.0.8",
+  "packageManager": "pnpm@9.12.3",
   "description": "Plug-and-play TypeScript/Node telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Zero internal cta-* dependencies.",
   "keywords": [
     "telemetry",
@@ -18,11 +19,11 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joaomarcusa3/pump-evolution.git"
+    "url": "git+https://gitlab.topazevolution.com/topaz-ia/templates/sdk.git"
   },
-  "homepage": "https://github.com/joaomarcusa3/pump-evolution#readme",
+  "homepage": "https://gitlab.topazevolution.com/topaz-ia/templates/sdk/-/blob/main/README.md",
   "bugs": {
-    "url": "https://github.com/joaomarcusa3/pump-evolution/issues"
+    "url": "https://gitlab.topazevolution.com/topaz-ia/templates/sdk/-/issues"
   },
   "engines": {
     "node": ">=20.11.0"
@@ -82,6 +83,8 @@
     "@aws-sdk/client-bedrock-runtime": "^3.750.0",
     "@eslint/js": "^9.39.4",
     "@microsoft/api-extractor": "^7.52.0",
+    "@modelcontextprotocol/sdk": "^1.20.2",
+    "@types/node": "^20.11.0",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
     "aws-sdk-client-mock": "^4.1.0",
@@ -90,6 +93,7 @@
     "tsup": "^8.5.0",
     "typedoc": "^0.28.0",
     "typescript": "^5.6.3",
-    "vitest": "^3.2.6"
+    "vitest": "^3.2.6",
+    "zod": "^4.4.3"
   }
 }

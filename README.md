@@ -85,21 +85,57 @@ await pump.shutdown();
 ## MCP
 
 Um MCP não tem modelo — a unidade observável é a chamada de tool. Use `kind: mcp` no
-manifesto e auto-instrumente o servidor antes de registrar as tools:
+manifesto e auto-instrumente o servidor antes de registrar as tools.
+
+O `@modelcontextprotocol/sdk` tem **duas classes de servidor**, com superfícies
+diferentes. `instrumentMcpServer` cobre as duas — mas por caminhos diferentes, e vale
+saber qual é o seu:
+
+| Classe                                | Como as tools são registradas                          | O que é embrulhado                            |
+| ------------------------------------- | ------------------------------------------------------ | --------------------------------------------- |
+| `McpServer` (`server/mcp.js`)         | `registerTool(name, config, handler)` / `tool(name, …)` | cada método de registro; um handler por tool  |
+| `Server` (`server/index.js`)          | `setRequestHandler(CallToolRequestSchema, handler)`     | o handler único de `tools/call`, que despacha |
 
 ```ts
+// Alto nível — McpServer
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const server = pump.instrumentMcpServer(new McpServer({ name: 'meu-mcp', version: '1.0.0' }));
 server.registerTool('buscar_licitacao', { inputSchema }, async (args) => run(args));
 // cada tool registrada emite um span execute_tool governado
+```
 
-// no handler HTTP do MCP:
+```ts
+// Baixo nível — Server (é o caso do cta-factory-mcp)
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const server = pump.instrumentMcpServer(
+  new Server({ name: 'meu-mcp', version: '1.0.0' }, { capabilities: { tools: {} } }),
+);
+server.setRequestHandler(CallToolRequestSchema, async (req) => run(req.params));
+// cada tool despachada por esse handler emite seu próprio span,
+// com nome e input vindos de req.params.name / req.params.arguments
+```
+
+```ts
+// no handler HTTP do MCP (vale para as duas classes):
 const r = await auth.runWithIdentity(req.headers.authorization, () =>
   transport.handleRequest(req, res, body),
 );
 if (!r.ok) sendUnauthorized(res, r.reason);
 ```
+
+Chame `instrumentMcpServer` logo após construir o servidor. Com `McpServer` a ordem é
+obrigatória — só tools registradas DEPOIS são embrulhadas. Com `Server` um handler de
+`tools/call` já registrado também é instrumentado, mas manter a ordem continua sendo o
+hábito seguro. Instrumentar duas vezes o mesmo servidor é no-op (não duplica span).
+
+**Servidor de formato desconhecido → erro, não silêncio.** Se o objeto não expõe nem
+`registerTool`/`tool` nem `setRequestHandler`, `instrumentMcpServer` **lança**. Nenhum
+span sairia dali e o processo continuaria logando telemetria ativa — é exatamente o
+tipo de falha silenciosa que o SDK não pode ter. Nesse caso, embrulhe cada handler na
+mão com `pump.traceMcpTool({ name, input }, fn)`.
 
 Para tools avulsas (fora do registro), use `pump.traceMcpTool({ name, input }, fn)`.
 Uma tool fora do `allowedTools` gera finding de compliance (`TOOL_NOT_ALLOWED`); um
@@ -116,59 +152,6 @@ spans saem com `enduser.id`/`cta.department` sem passar `user-id` na mão. Retor
 Primitiva de baixo nível: `pump.withUser({ userId, department }, fn)` — quando a
 identidade não vem de um JWT. Sem identidade, o span recebe `cta.identity.anonymous=true`
 (nunca inventa usuário).
-
-## Runtime gerenciado (opcional — rodar no AgentCore de PRD da plataforma)
-
-Alternativa opt-in ao "runtime próprio + só telemetria": em vez de rodar o agente na
-sua conta/cloud, você o **hospeda no runtime AgentCore de PRD da plataforma** (conta de
-tooling) e apenas **invoca** por HTTPS + OAuth. O "cérebro" (prompt + modelo + tools) e
-o **catálogo de modelos** são da plataforma. Funciona de **qualquer conta AWS, region ou
-cloud** — não precisa de credencial AWS no seu lado, só o par client-credentials do
-Cognito (o mesmo tipo de credencial da telemetria, com o scope de invoke).
-
-No registro do agente (Factory/portal) você escolhe essa opção e recebe: `agentId`,
-endpoint de invoke e a credencial de invoke (client_id + client_secret show-once).
-
-```ts
-import { ManagedAgentClient } from '@topaz-ia/pump-evolution';
-
-// Monte a partir do env (recomendado) — ver variáveis abaixo:
-const agent = ManagedAgentClient.fromEnv();
-
-// Ou explicitamente a partir da base do CTA + agentId:
-// const agent = ManagedAgentClient.forAgent({
-//   baseUrl: 'https://<cta>',
-//   agentId: '<agentId>',
-//   serviceAccount: { clientId, clientSecret, tokenUrl },
-// });
-
-// userToken = JWT do usuário final (Cognito), propagado p/ atribuição de custo/departamento
-const r = await agent.invoke({
-  message: 'Analise este contrato...',
-  userToken: req.headers.authorization,
-});
-console.log(r.reply); // resposta gerada no runtime da plataforma
-```
-
-Variáveis de ambiente para `fromEnv()`:
-
-| Variável                        | Descrição                                                        |
-| ------------------------------- | ---------------------------------------------------------------- |
-| `PUMP_MANAGED_AGENT_ENDPOINT`   | URL de invoke (`https://<cta>/api/agents/<agentId>/invoke`)      |
-| `PUMP_MANAGED_AGENT_ID`         | id do agente no registro do CTA (deriva o scope de invoke)       |
-| `PUMP_MANAGED_CLIENT_ID`        | client_id do service account de invoke                           |
-| `PUMP_MANAGED_CLIENT_SECRET`    | client_secret (nunca no código/manifesto)                        |
-| `PUMP_MANAGED_TOKEN_URL`        | endpoint OAuth do Cognito (`.../oauth2/token`)                   |
-| `PUMP_MANAGED_INVOKE_SCOPE`     | opcional — default `cta-consumers/invoke:agent:<agentId>`        |
-
-> **Diferença de comportamento vs. telemetria:** `invoke` é a chamada **real** do seu
-> agente — não é telemetria. Por isso ele **lança** `ManagedAgentInvokeError` em falha
-> (HTTP não-2xx, rede, corpo inválido), com `status` e `body` para você tratar. Não há
-> fallback silencioso. Trate o erro no seu fluxo.
->
-> **Limite do catálogo:** o agente só usa os modelos disponíveis na conta da plataforma.
-> Se o modelo pedido não estiver no catálogo, isso é resolvido no registro (falha
-> explícita), não em runtime.
 
 ## Comportamento
 
@@ -234,7 +217,9 @@ invente nenhum dado do passo 2 — pergunte ao humano.
 6. Instrumentar:
    - Agente Bedrock: const bedrock = pump.instrumentBedrock(client)
    - MCP: const server = pump.instrumentMcpServer(mcpServer) — ANTES de
-     registrar qualquer tool.
+     registrar qualquer tool. Vale para as duas classes do SDK MCP:
+     McpServer (registerTool/tool) e Server (setRequestHandler). Servidor
+     de outro formato lança erro em vez de virar no-op.
 
 7. Por request, autenticar e propagar identidade numa chamada só:
    const r = await auth.runWithIdentity(req.headers.authorization, () => /* chamada real */);

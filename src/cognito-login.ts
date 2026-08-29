@@ -1,78 +1,95 @@
 /**
- * cognito-login — login OAuth2 (Authorization Code + PKCE) contra o Cognito de
- * usuário da plataforma. Paridade Node do `integrations/cognito.py`.
+ * cognito-login — OAuth2 login (Authorization Code + PKCE) against the
+ * platform's end-user Cognito pool.
  *
- * ## Por que existe
+ * ## Why this exists
  *
- * A orientação antiga era "não mude o Cognito do agente — o SDK só lê o
- * `id_token` que ele já tem". Só que quase nenhum Cognito de cliente carregava os
- * claims de custo (`custom:department`, `custom:cost_center`), então o span saía
- * com o usuário certo e SEM departamento — perdendo a atribuição de custo, que é
- * a razão de a governança existir.
+ * The old guidance was "don't touch the agent's Cognito — the SDK just reads the
+ * `id_token` it already has". But almost no customer pool carried the cost
+ * claims (`custom:department`, `custom:cost_center`), so spans came out with the
+ * right user and NO department — losing the cost attribution that is the whole
+ * reason governance exists.
  *
- * A solução: o **User Pool de usuário final vive na conta de tooling da
- * plataforma**, com os claims de custo governados por nós. O agente troca o login
- * dele para esse pool. O App Client é provisionado no INSTALL (Factory API), não
- * no registro — o instalador coleta as callback URLs do app real antes de criar
- * o client. As variáveis `COGNITO_*` saem desse provisionamento.
+ * The answer: the end-user pool lives in the platform, with the cost claims
+ * governed by us, and each component gets its own App Client. The client is
+ * provisioned at install time by the Factory
+ * (`cta_factory_provisionar_cognito`), which writes `runtime.cognito` into the
+ * manifest and hands back the matching `COGNITO_*` variables. This module is the
+ * consumer of that contract — it never provisions anything.
  *
- * ## O que este módulo entrega
+ * ## Two identities that never cross
  *
- * Diferente do Python (que tem `PumpIdentityMiddleware` p/ FastAPI), o Node não
- * assume um framework web. Este módulo entrega **primitivas testáveis** + um par
- * de **handlers estilo Express/Connect** para quem quer as rotas prontas, sem
- * adicionar `express` como dependência.
+ * This is the login of the PEOPLE who use the component. The telemetry service
+ * account (`PumpEvolution.init`, `client_credentials`) authenticates the PROCESS.
+ * A `client_credentials` token has no user, therefore no department — which is
+ * exactly why this second identity had to exist.
  *
- * Uso com as rotas prontas (Express + express-session):
+ * ## Usage
  *
- *     import { CognitoLogin } from '@topaz-ia/pump-evolution';
+ * From the manifest, which is where the Factory writes everything (preferred —
+ * nothing to copy by hand, and no secret in git):
+ *
+ *     const login = CognitoLogin.fromManifest('./manifest.yaml');
+ *
+ * Or from the environment, when the app already keeps its config there:
+ *
  *     const login = CognitoLogin.fromEnv();
+ *
+ * With the ready-made routes (Express + express-session):
+ *
  *     const routes = login.expressRoutes();
  *     app.get('/auth/login', routes.login);
  *     app.get('/auth/callback', routes.callback);
  *     app.get('/auth/logout', routes.logout);
  *
- * Depois, por requisição, propague a identidade do usuário logado para os spans:
+ * Then, per request, propagate the logged-in identity to the spans:
  *
  *     await pump.withUser(login.userContextFromIdToken(req.session.pumpIdToken), () => handler());
  *
- * Uso com as primitivas (qualquer framework — Fastify, Hono, http cru):
+ * With the primitives, for any framework:
  *
  *     const { verifier, challenge } = login.createPkce();
  *     const state = login.createState();
- *     // guarde verifier+state na sua sessão, redirecione para:
+ *     // keep verifier+state in your session, redirect to:
  *     login.authorizeUrl({ state, codeChallenge: challenge });
- *     // no callback, valide o state e troque o code:
- *     const tokens = await login.exchangeCode(code, verifier);
+ *     // in the callback, check the state and exchange the code:
+ *     const result = await login.handleCallback({ code, codeVerifier: verifier });
  *
- * ## Segurança
- * - PKCE (S256) sempre + `state` — protege contra interceptação de código e CSRF.
- * - `clientSecret` só no Basic auth da troca de token (server-to-server, TLS).
- * - `id_token` decodificado SEM verificar assinatura (mesmo contrato do resto do
- *   SDK: cliente lê, receiver verifica). A confiança vem da troca autenticada
- *   contra o token endpoint do Cognito sobre TLS. Para VERIFICAR o token de quem
- *   chama uma API, use `ConsumerTokenVerifier` (RS256 + JWKS).
+ * ## Security
  *
- * Erros de CONFIG lançam no boot (init-time, igual ao resto do SDK). Falhas de
- * troca de token em runtime retornam `undefined`/resultado `{ ok:false }` — o
- * handler responde erro; login é crítico, não degrada em silêncio como telemetria.
+ * - PKCE (S256) always, plus `state` — protects against code interception and CSRF.
+ * - `clientSecret` only in the Basic auth of the token exchange (server-to-server,
+ *   over TLS). A public client (the platform default) has none.
+ * - The `id_token` is decoded WITHOUT signature verification, which is the
+ *   standard allowance for a token obtained directly from the token endpoint over
+ *   TLS (OIDC Core 3.1.3.7). `iss`, `aud` and `exp` ARE checked — those are cheap
+ *   and catch a stale session, which signature validation would not. To verify a
+ *   token that arrives from a CALLER, use `ConsumerTokenVerifier` (RS256 + JWKS).
+ * - Post-login redirects are restricted to same-site paths. `//evil.com` and
+ *   `/\evil.com` are rejected, not just `https://evil.com` — a protocol-relative
+ *   URL starts with `/` and would otherwise pass a naive check.
+ *
+ * CONFIG errors throw at boot (init-time, like the rest of the SDK). Runtime
+ * failures return `{ ok: false, reason }` AND report through the injected logger —
+ * login is critical, it does not degrade silently the way telemetry does.
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { claimsToUserContext } from './identity-context.js';
 import { loadManifest } from './manifest-loader.js';
-import type { AgentManifest, UserContext } from './types.js';
+import type { AgentManifest, ManifestCognito, TelemetryLogger, UserContext } from './types.js';
 
-// ─── fetch injetável (paridade com consumer-auth / token-provider) ────────────
+// ─── Injectable fetch (parity with consumer-auth / token-provider) ─────────────
 
-/** `fetch` mínimo para a troca de token, injetável para testes. */
+/** Minimal `fetch` for the token exchange, injectable for tests. */
 export type CognitoFetchLike = (
   input: string,
   init?: {
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
@@ -82,31 +99,60 @@ const TOKEN_TIMEOUT_MS = 10_000;
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 export interface CognitoLoginConfig {
-  /** Domínio do Hosted UI, ex.: `https://<prefixo>.auth.<region>.amazoncognito.com`. */
+  /** Hosted UI domain, e.g. `https://<prefix>.auth.<region>.amazoncognito.com`. */
   readonly domain: string;
-  /** App Client provisionado para este agente (Factory API). */
+  /** App Client provisioned for this component (Factory API). */
   readonly clientId: string;
-  /** URL absoluta do callback, registrada no App Client. */
+  /** Absolute callback URL, registered on the App Client. */
   readonly redirectUri: string;
-  /** Secret do App Client confidencial. Omitido para client público (só PKCE). */
+  /**
+   * Token issuer (`https://cognito-idp.<region>.amazonaws.com/<poolId>`).
+   * Optional, but when given the `iss` claim of the `id_token` is checked
+   * against it — a token from another pool is rejected instead of silently
+   * becoming the span's identity.
+   */
+  readonly issuer?: string;
+  /** Secret of a confidential App Client. Omitted for a public client (PKCE only). */
   readonly clientSecret?: string;
-  /** Escopos OAuth. Default `openid email profile`. */
+  /** OAuth scopes. Defaults to `openid email profile`. */
   readonly scopes?: string;
-  /** Para onde voltar após o logout do Cognito. */
+  /** Where to return after the Cognito logout. */
   readonly logoutRedirectUri?: string;
-  /** `fetch` injetável (default global `fetch`, Node 18+). */
+  /**
+   * Federated provider to send to `/oauth2/authorize`, so the user lands on the
+   * SSO and skips the username/password screen.
+   *
+   * The platform only fills this when the pool has EXACTLY ONE federated
+   * provider — with two or more, guessing would send people to the wrong SSO.
+   * Absence is therefore meaningful: fall back to the Hosted UI picker.
+   */
+  readonly identityProvider?: string;
+  /** Injectable `fetch` (defaults to the global one, Node 18+). */
   readonly fetchImpl?: CognitoFetchLike;
+  /**
+   * Where login failures are reported. Without it a failed exchange is a 302 to
+   * `/` and nothing else — the operator sees a redirect indistinguishable from
+   * success.
+   */
+  readonly logger?: TelemetryLogger;
+  /** Injectable clock, for testing the `exp` check. */
+  readonly now?: () => number;
 }
 
-/** Par PKCE (verifier guardado na sessão; challenge vai na URL de autorização). */
+/** PKCE pair — verifier stays in the session, challenge goes in the authorize URL. */
 export interface Pkce {
   readonly verifier: string;
   readonly challenge: string;
 }
 
-/** Resultado do tratamento de callback (framework-neutro). */
+/** Framework-neutral result of handling the callback. */
 export type CallbackResult =
-  | { readonly ok: true; readonly idToken: string; readonly user: UserContext; readonly tokens: Record<string, unknown> }
+  | {
+      readonly ok: true;
+      readonly idToken: string;
+      readonly user: UserContext;
+      readonly tokens: Record<string, unknown>;
+    }
   | { readonly ok: false; readonly reason: string };
 
 function base64UrlNoPad(buf: Buffer): string {
@@ -117,16 +163,45 @@ function isNonEmpty(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0;
 }
 
-// ─── CognitoLogin ───────────────────────────────────────────────────────────
+/**
+ * Constant-time comparison of the `state`. The value is single-use and
+ * session-bound, so a timing attack is far-fetched — but the comparison is
+ * against attacker-supplied input, and `timingSafeEqual` costs nothing here.
+ */
+function sameState(received: string, expected: string): boolean {
+  const a = Buffer.from(received);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Post-login destination, restricted to a same-site path.
+ *
+ * `startsWith('/')` alone is NOT enough: `//evil.com` and `/\evil.com` both pass
+ * it, and browsers read them as protocol-relative URLs — an open redirect on an
+ * ALREADY-AUTHENTICATED user, which is the worst moment for one.
+ */
+export function safeNextPath(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '/';
+  if (!value.startsWith('/')) return '/';
+  if (value.startsWith('//') || value.startsWith('/\\')) return '/';
+  return value;
+}
+
+// ─── CognitoLogin ─────────────────────────────────────────────────────────────
 
 export class CognitoLogin {
   private readonly domain: string;
   private readonly clientId: string;
   private readonly redirectUri: string;
+  private readonly issuerValue: string | undefined;
   private readonly clientSecret: string | undefined;
   private readonly scopes: string;
   private readonly logoutRedirectUri: string | undefined;
+  private readonly identityProvider: string | undefined;
   private readonly fetchImpl: CognitoFetchLike;
+  private readonly logger: TelemetryLogger | undefined;
+  private readonly now: () => number;
 
   constructor(config: CognitoLoginConfig) {
     const missing = (['domain', 'clientId', 'redirectUri'] as const).filter(
@@ -134,9 +209,9 @@ export class CognitoLogin {
     );
     if (missing.length > 0) {
       throw new Error(
-        `[pump-evolution] CognitoLogin: config incompleto (${missing.join(', ')}). ` +
-          'Esses valores saem do provisionamento do App Client (Factory API) e vão no ' +
-          '.env do app — sem fallback.',
+        `[pump-evolution] CognitoLogin: incomplete config (${missing.join(', ')}). ` +
+          'These values come from provisioning the App Client (Factory API) and land in ' +
+          '`runtime.cognito` of the manifest or in the app `.env`. No default is applied.',
       );
     }
     const resolvedFetch = config.fetchImpl ?? (globalThis.fetch as CognitoFetchLike | undefined);
@@ -146,92 +221,115 @@ export class CognitoLogin {
     this.domain = config.domain.replace(/\/$/, '');
     this.clientId = config.clientId;
     this.redirectUri = config.redirectUri;
+    this.issuerValue = config.issuer;
     this.clientSecret = config.clientSecret;
     this.scopes = config.scopes ?? DEFAULT_SCOPES;
     this.logoutRedirectUri = config.logoutRedirectUri;
+    this.identityProvider = config.identityProvider;
     this.fetchImpl = resolvedFetch;
+    this.logger = config.logger;
+    this.now = config.now ?? Date.now;
   }
 
   /**
-   * Constrói a partir das variáveis `COGNITO_*` do ambiente. As três primeiras
-   * são obrigatórias:
-   *  - `COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`, `COGNITO_REDIRECT_URI`
-   *  - `COGNITO_CLIENT_SECRET` (opcional, client confidencial)
-   *  - `COGNITO_SCOPES` (opcional), `COGNITO_LOGOUT_REDIRECT_URI` (opcional)
-   */
-  static fromEnv(env: Record<string, string | undefined> = process.env): CognitoLogin {
-    return new CognitoLogin({
-      domain: env.COGNITO_DOMAIN ?? '',
-      clientId: env.COGNITO_CLIENT_ID ?? '',
-      redirectUri: env.COGNITO_REDIRECT_URI ?? '',
-      ...(env.COGNITO_CLIENT_SECRET ? { clientSecret: env.COGNITO_CLIENT_SECRET } : {}),
-      ...(env.COGNITO_SCOPES ? { scopes: env.COGNITO_SCOPES } : {}),
-      ...(env.COGNITO_LOGOUT_REDIRECT_URI
-        ? { logoutRedirectUri: env.COGNITO_LOGOUT_REDIRECT_URI }
-        : {}),
-    });
-  }
-
-  /**
-   * Constrói a partir do MANIFESTO (`runtime.cognito`) — o bloco que o portal/MCP
-   * provisiona e grava no manifesto no install. É o caminho preferido: o dev não
-   * copia `COGNITO_*` à mão; o SDK lê tudo do manifesto.
+   * Builds from `runtime.cognito` in the manifest — the block the Factory writes
+   * when it provisions the App Client. Preferred over {@link fromEnv}: nothing is
+   * copied by hand, and the block is git-safe (the platform never writes a secret
+   * there).
    *
-   * O `clientSecret` NUNCA vem do manifesto (git-safe). Para um App Client
-   * confidencial, passe `clientSecret` em `options` ou deixe o SDK ler
-   * `COGNITO_CLIENT_SECRET` do ambiente. Cliente público (PKCE) não precisa dele.
+   * A confidential client still needs its secret from the environment, so
+   * `COGNITO_CLIENT_SECRET` is read as an override when present.
    *
-   * Lança se o manifesto não declarar `runtime.cognito` — sem fallback (ADR-0031):
-   * ausência de config de login é explícita, não silenciosa.
+   * @param manifest Path to `manifest.yaml`, or an already-loaded manifest.
    */
   static fromManifest(
-    source: string | AgentManifest,
-    options: {
-      readonly clientSecret?: string;
-      readonly fetchImpl?: CognitoFetchLike;
+    manifest: string | AgentManifest,
+    overrides: Partial<CognitoLoginConfig> & {
       readonly env?: Record<string, string | undefined>;
     } = {},
   ): CognitoLogin {
-    const manifest = loadManifest(source);
-    const cognito = manifest.runtime?.cognito;
+    const loaded = typeof manifest === 'string' ? loadManifest(manifest) : manifest;
+    const cognito: ManifestCognito | undefined = loaded.runtime?.cognito;
     if (cognito === undefined) {
       throw new Error(
-        '[pump-evolution] CognitoLogin.fromManifest: manifesto sem `runtime.cognito`. ' +
-          'Esse bloco é provisionado pelo portal/MCP no install (App Client de login) e ' +
-          'gravado no manifesto — sem fallback. Use CognitoLogin.fromEnv() se o login vier ' +
-          'só do ambiente.',
+        '[pump-evolution] CognitoLogin.fromManifest: the manifest has no `runtime.cognito`. ' +
+          'Provision the login App Client first (Factory: `cta_factory_provisionar_cognito`), ' +
+          'which writes that block. No default is applied.',
       );
     }
-    const env = options.env ?? process.env;
-    const clientSecret = options.clientSecret ?? env.COGNITO_CLIENT_SECRET;
+    const env = overrides.env ?? process.env;
+    const { env: _ignored, ...rest } = overrides;
     return new CognitoLogin({
       domain: cognito.domain,
       clientId: cognito.clientId,
       redirectUri: cognito.redirectUri,
-      ...(isNonEmpty(clientSecret) ? { clientSecret } : {}),
-      ...(cognito.scopes !== undefined ? { scopes: cognito.scopes } : {}),
+      issuer: cognito.issuer,
+      scopes: cognito.scopes,
+      ...(cognito.identityProvider !== undefined
+        ? { identityProvider: cognito.identityProvider }
+        : {}),
       ...(cognito.logoutRedirectUri !== undefined
         ? { logoutRedirectUri: cognito.logoutRedirectUri }
         : {}),
-      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+      // The manifest never carries the secret — a confidential client reads it
+      // from the environment, same as the telemetry service account.
+      ...(isNonEmpty(env.COGNITO_CLIENT_SECRET)
+        ? { clientSecret: env.COGNITO_CLIENT_SECRET }
+        : {}),
+      ...rest,
     });
   }
 
-  // ─── Primitivas ─────────────────────────────────────────────────────────
+  /**
+   * Builds from the `COGNITO_*` variables — the same block the Factory prints
+   * after provisioning. Required: `COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`,
+   * `COGNITO_REDIRECT_URI`. Optional: `COGNITO_ISSUER`, `COGNITO_CLIENT_SECRET`,
+   * `COGNITO_SCOPES`, `COGNITO_IDENTITY_PROVIDER`, `COGNITO_LOGOUT_REDIRECT_URI`.
+   */
+  static fromEnv(
+    env: Record<string, string | undefined> = process.env,
+    overrides: Partial<CognitoLoginConfig> = {},
+  ): CognitoLogin {
+    return new CognitoLogin({
+      domain: env.COGNITO_DOMAIN ?? '',
+      clientId: env.COGNITO_CLIENT_ID ?? '',
+      redirectUri: env.COGNITO_REDIRECT_URI ?? '',
+      ...(env.COGNITO_ISSUER ? { issuer: env.COGNITO_ISSUER } : {}),
+      ...(env.COGNITO_CLIENT_SECRET ? { clientSecret: env.COGNITO_CLIENT_SECRET } : {}),
+      ...(env.COGNITO_SCOPES ? { scopes: env.COGNITO_SCOPES } : {}),
+      ...(env.COGNITO_IDENTITY_PROVIDER
+        ? { identityProvider: env.COGNITO_IDENTITY_PROVIDER }
+        : {}),
+      ...(env.COGNITO_LOGOUT_REDIRECT_URI
+        ? { logoutRedirectUri: env.COGNITO_LOGOUT_REDIRECT_URI }
+        : {}),
+      ...overrides,
+    });
+  }
 
-  /** Gera um par PKCE (verifier aleatório + challenge S256). */
+  /** Token issuer, when configured. Useful to wire a `ConsumerTokenVerifier`. */
+  get issuer(): string | undefined {
+    return this.issuerValue;
+  }
+
+  // ─── Primitives ─────────────────────────────────────────────────────────
+
+  /** Generates a PKCE pair (random verifier + S256 challenge). */
   createPkce(): Pkce {
     const verifier = base64UrlNoPad(randomBytes(32));
     const challenge = base64UrlNoPad(createHash('sha256').update(verifier).digest());
     return { verifier, challenge };
   }
 
-  /** Gera um `state` opaco para proteção CSRF no callback. */
+  /** Generates an opaque `state` for CSRF protection on the callback. */
   createState(): string {
     return base64UrlNoPad(randomBytes(24));
   }
 
-  /** Monta a URL de autorização do Hosted UI. */
+  /**
+   * Builds the Hosted UI authorization URL. When `identityProvider` is known,
+   * `identity_provider` goes along and the user lands straight on the SSO.
+   */
   authorizeUrl(args: { state: string; codeChallenge: string }): string {
     const params = new URLSearchParams({
       response_type: 'code',
@@ -241,11 +339,21 @@ export class CognitoLogin {
       state: args.state,
       code_challenge: args.codeChallenge,
       code_challenge_method: 'S256',
+      ...(this.identityProvider !== undefined
+        ? { identity_provider: this.identityProvider }
+        : {}),
     });
     return `${this.domain}/oauth2/authorize?${params.toString()}`;
   }
 
-  /** URL de logout do Cognito, ou `undefined` se `logoutRedirectUri` não configurado. */
+  /**
+   * Cognito logout URL, or `undefined` when `logoutRedirectUri` is not set.
+   *
+   * Without it there is no Cognito logout at all: clearing the local session
+   * leaves the Cognito session alive, and the next `/auth/login` re-authenticates
+   * with no prompt — the user swears they logged out. The routes below warn
+   * through the logger when they hit that case.
+   */
   logoutUrl(): string | undefined {
     if (this.logoutRedirectUri === undefined) return undefined;
     const params = new URLSearchParams({
@@ -256,11 +364,18 @@ export class CognitoLogin {
   }
 
   /**
-   * Troca o authorization code por tokens no endpoint `/oauth2/token`.
-   * Server-to-server sobre TLS; o `clientSecret` (se houver) vai no Basic auth.
-   * Retorna o dict de tokens, ou `undefined` em qualquer falha (sem vazar detalhe).
+   * Exchanges the authorization code for tokens at `/oauth2/token`.
+   * Server-to-server over TLS; the `clientSecret` (when there is one) goes in
+   * Basic auth. Returns `{ ok: false, reason }` on failure — and reports the
+   * reason through the logger, because a swallowed 401 here looks exactly like a
+   * network blip.
    */
-  async exchangeCode(code: string, codeVerifier: string): Promise<Record<string, unknown> | undefined> {
+  async exchangeCode(
+    code: string,
+    codeVerifier: string,
+  ): Promise<
+    { readonly ok: true; readonly tokens: Record<string, unknown> } | { readonly ok: false; readonly reason: string }
+  > {
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: this.clientId,
@@ -286,36 +401,82 @@ export class CognitoLogin {
           ...signalInit,
         }),
       );
-      if (!res.ok) return undefined;
+      if (!res.ok) {
+        // The body carries Cognito's `error`/`error_description`, which is what
+        // tells apart a bad secret from a redirect_uri mismatch. It never
+        // contains the secret itself — the secret travels in the request header.
+        const detail = await res.text().catch(() => '');
+        const reason = `token endpoint returned HTTP ${res.status}`;
+        this.report(reason, { status: res.status, detail: detail.slice(0, 300) });
+        return { ok: false, reason };
+      }
       const parsed: unknown = JSON.parse(await res.text());
-      return typeof parsed === 'object' && parsed !== null
-        ? (parsed as Record<string, unknown>)
-        : undefined;
-    } catch {
-      return undefined;
+      if (typeof parsed !== 'object' || parsed === null) {
+        const reason = 'token endpoint returned a non-object payload';
+        this.report(reason);
+        return { ok: false, reason };
+      }
+      return { ok: true, tokens: parsed as Record<string, unknown> };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.report('token exchange failed', { error: reason });
+      return { ok: false, reason };
     }
   }
 
   /**
-   * Decodifica o `id_token` (SEM verificar assinatura) e mapeia os claims para
-   * `UserContext` (`enduser.id`/`department`/`cost_center`). O token é preservado
-   * em `UserContext.token` para propagação downstream. Alimenta `pump.withUser`.
-   * Nunca lança — token malformado devolve contexto vazio (anônimo no span).
+   * Decodes the `id_token` (no signature check — see the Security note at the
+   * top) and maps the claims to a `UserContext`. `iss`, `aud` and `exp` ARE
+   * validated: an expired token in a long-lived session would otherwise keep
+   * attributing spans to someone who logged out hours ago.
+   *
+   * Never throws — a malformed or expired token yields an empty context, which
+   * the span records as anonymous rather than as a fabricated user.
    */
   userContextFromIdToken(idToken: string | undefined): UserContext {
     if (!isNonEmpty(idToken)) return {};
     const claims = decodeJwtPayload(idToken);
-    if (claims === undefined) return {};
+    if (claims === undefined) {
+      this.report('id_token could not be decoded');
+      return {};
+    }
+    const problem = this.checkClaims(claims);
+    if (problem !== undefined) {
+      this.report(`id_token rejected: ${problem}`);
+      return {};
+    }
     return { ...claimsToUserContext(claims), token: idToken };
   }
 
-  // ─── Handlers Express/Connect (opcionais, sem depender de `express`) ──────
+  /**
+   * Handles the callback framework-neutrally: the caller has already checked the
+   * `state`. Exchanges the code and resolves the identity.
+   */
+  async handleCallback(args: { code: string; codeVerifier: string }): Promise<CallbackResult> {
+    const exchanged = await this.exchangeCode(args.code, args.codeVerifier);
+    if (!exchanged.ok) return { ok: false, reason: exchanged.reason };
+    const idToken = exchanged.tokens.id_token;
+    if (!isNonEmpty(idToken)) {
+      const reason = 'token response has no id_token';
+      this.report(reason);
+      return { ok: false, reason };
+    }
+    return {
+      ok: true,
+      idToken,
+      user: this.userContextFromIdToken(idToken),
+      tokens: exchanged.tokens,
+    };
+  }
+
+  // ─── Express/Connect handlers (optional, without depending on `express`) ──
 
   /**
-   * Handlers `(req, res)` compatíveis com Express/Connect para `/auth/login`,
-   * `/auth/callback` e `/auth/logout`. Usam `req.session` (express-session) para
-   * guardar `state`/PKCE e o `id_token`. Não importam `express` — funcionam com
-   * qualquer framework que exponha `req.query`, `req.session` e `res.redirect`.
+   * `(req, res)` handlers compatible with Express/Connect for `/auth/login`,
+   * `/auth/callback` and `/auth/logout`. They use `req.session`
+   * (express-session) to hold `state`/PKCE and the `id_token`. `express` is not
+   * imported — anything exposing `req.query`, `req.session` and `res.redirect`
+   * works.
    */
   expressRoutes(): {
     login: (req: ExpressLikeReq, res: ExpressLikeRes) => void;
@@ -325,50 +486,46 @@ export class CognitoLogin {
     return {
       login: (req, res) => {
         const session = req.session;
-        if (session === undefined) return sessionMissing(res);
+        if (session === undefined) return this.sessionMissing(res);
         const { verifier, challenge } = this.createPkce();
         const state = this.createState();
         session.pumpCognitoState = state;
         session.pumpCognitoVerifier = verifier;
-        const next = typeof req.query.next === 'string' && req.query.next.startsWith('/')
-          ? req.query.next
-          : '/';
-        session.pumpCognitoNext = next;
+        session.pumpCognitoNext = safeNextPath(req.query.next);
         res.redirect(this.authorizeUrl({ state, codeChallenge: challenge }));
       },
 
       callback: async (req, res) => {
         const session = req.session;
-        if (session === undefined) return sessionMissing(res);
+        if (session === undefined) return this.sessionMissing(res);
 
-        if (typeof req.query.error === 'string') {
-          res.status(400);
-          res.redirect('/');
-          return;
-        }
-        const code = typeof req.query.code === 'string' ? req.query.code : undefined;
-        const state = typeof req.query.state === 'string' ? req.query.state : undefined;
         const expected = session.pumpCognitoState;
         const verifier = session.pumpCognitoVerifier;
+        // Single-use: cleared before any early return, so a replayed callback
+        // cannot reuse them.
         delete session.pumpCognitoState;
         delete session.pumpCognitoVerifier;
 
-        if (!code || !state || state !== expected || !verifier) {
-          res.status(400);
-          res.redirect('/');
-          return;
+        if (typeof req.query.error === 'string') {
+          return this.failCallback(req, res, `authorize returned error=${req.query.error}`);
+        }
+        const code = typeof req.query.code === 'string' ? req.query.code : undefined;
+        const state = typeof req.query.state === 'string' ? req.query.state : undefined;
+        if (!code || !state || !expected || !verifier) {
+          return this.failCallback(req, res, 'callback missing code/state or session data');
+        }
+        if (!sameState(state, expected)) {
+          return this.failCallback(req, res, 'state mismatch (possible CSRF)');
         }
 
         const result = await this.handleCallback({ code, codeVerifier: verifier });
         if (!result.ok) {
-          res.status(502);
-          res.redirect('/');
-          return;
+          return this.failCallback(req, res, result.reason);
         }
         session.pumpIdToken = result.idToken;
-        const next = session.pumpCognitoNext ?? '/';
+        const next = safeNextPath(session.pumpCognitoNext);
         delete session.pumpCognitoNext;
-        res.redirect(typeof next === 'string' && next.startsWith('/') ? next : '/');
+        res.redirect(next);
       },
 
       logout: (req, res) => {
@@ -376,30 +533,71 @@ export class CognitoLogin {
           delete req.session.pumpIdToken;
           delete req.session.pumpCognitoState;
           delete req.session.pumpCognitoVerifier;
+          delete req.session.pumpCognitoNext;
         }
-        res.redirect(this.logoutUrl() ?? '/');
+        const url = this.logoutUrl();
+        if (url === undefined) {
+          this.report(
+            'logout only cleared the local session: no logoutRedirectUri configured, so the ' +
+              'Cognito session stays alive and the next login will not prompt',
+          );
+          res.redirect('/');
+          return;
+        }
+        res.redirect(url);
       },
     };
   }
 
+  // ─── Internal ─────────────────────────────────────────────────────────────
+
   /**
-   * Trata a callback de forma framework-neutra: valida nada de sessão (o chamador
-   * já validou o `state`), troca o code e resolve a identidade. Testável sem
-   * framework web.
+   * Validates the claims the SDK can check without the signature. Returns the
+   * problem, or `undefined` when the token is acceptable.
    */
-  async handleCallback(args: { code: string; codeVerifier: string }): Promise<CallbackResult> {
-    const tokens = await this.exchangeCode(args.code, args.codeVerifier);
-    if (tokens === undefined) return { ok: false, reason: 'token_exchange_failed' };
-    const idToken = tokens.id_token;
-    if (!isNonEmpty(idToken)) return { ok: false, reason: 'no_id_token' };
-    return { ok: true, idToken, user: this.userContextFromIdToken(idToken), tokens };
+  private checkClaims(claims: Record<string, unknown>): string | undefined {
+    if (this.issuerValue !== undefined && claims.iss !== this.issuerValue) {
+      return 'iss does not match the configured issuer';
+    }
+    const aud = claims.aud;
+    const audMatches =
+      aud === undefined
+        ? true
+        : typeof aud === 'string'
+          ? aud === this.clientId
+          : Array.isArray(aud) && aud.includes(this.clientId);
+    if (!audMatches) return 'aud does not match the App Client';
+    const exp = claims.exp;
+    if (typeof exp === 'number' && exp * 1000 <= this.now()) return 'expired';
+    return undefined;
   }
 
-  // ─── Interno ──────────────────────────────────────────────────────────────
+  /** Reports a login problem. Silent only when no logger was provided. */
+  private report(message: string, meta?: Record<string, unknown>): void {
+    try {
+      this.logger?.warn?.(`[pump-evolution] CognitoLogin: ${message}`, meta);
+    } catch {
+      // A broken logger must not break the login flow.
+    }
+  }
 
-  private async withTimeout<T>(
-    fn: (signalInit: { signal?: AbortSignal }) => Promise<T>,
-  ): Promise<T> {
+  private failCallback(req: ExpressLikeReq, res: ExpressLikeRes, reason: string): void {
+    this.report(`login failed: ${reason}`);
+    const next = safeNextPath(req.session?.pumpCognitoNext);
+    if (req.session !== undefined) delete req.session.pumpCognitoNext;
+    // Express's `redirect` overrides any status set beforehand, so the status is
+    // not what carries the failure — the logger is. The user goes back to the
+    // entry point rather than to a blank page.
+    res.redirect(next);
+  }
+
+  private sessionMissing(res: ExpressLikeRes): void {
+    this.report('no `req.session`: express-session (or equivalent) is required');
+    res.status(500);
+    res.redirect('/');
+  }
+
+  private async withTimeout<T>(fn: (signalInit: { signal?: AbortSignal }) => Promise<T>): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
     try {
@@ -410,7 +608,7 @@ export class CognitoLogin {
   }
 }
 
-// ─── Tipos mínimos Express/Connect (sem importar express) ─────────────────────
+// ─── Minimal Express/Connect types (without importing express) ────────────────
 
 interface ExpressLikeSession {
   pumpCognitoState?: string;
@@ -430,12 +628,7 @@ interface ExpressLikeRes {
   redirect: (url: string) => unknown;
 }
 
-function sessionMissing(res: ExpressLikeRes): void {
-  res.status(500);
-  res.redirect('/');
-}
-
-// ─── Decodificação local do payload JWT (sem verificar assinatura) ────────────
+// ─── Local JWT payload decoding (no signature check) ──────────────────────────
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const segments = token.split('.');

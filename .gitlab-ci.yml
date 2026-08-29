@@ -1,0 +1,256 @@
+# =============================================================================
+# pump-evolution — build, empacotamento e publicação do vendor zip
+#
+# O SDK não está no npm nem no PyPI público: é distribuído como zip no S3 e
+# servido pela plataforma em GET /api/sdk/download (ADR-0055/0057).
+#
+# Até 25/08/2026 esse zip era montado e enviado à mão. O resultado foi que o
+# artefato ficou À FRENTE do repositório — havia código e documentação que só
+# existiam dentro dele. Esta pipeline fecha o elo: mergeou em `main`, o zip é
+# reconstruído a partir do repositório e publicado na conta.
+#
+# Três jobs, cada um com a ferramenta certa: Node para compilar, Python para
+# montar, AWS CLI para publicar.
+# =============================================================================
+
+# Os runners deste GitLab são registrados COM tag: job sem tag não encontra
+# executor e fica pendente para sempre. `eks` é o runner default do grupo, o
+# mesmo que a pipeline da plataforma usa em todos os jobs.
+default:
+  tags:
+    - eks
+  retry:
+    max: 2
+    when: runner_system_failure
+
+stages:
+  - quality
+  - build
+  - package
+  - publish
+
+variables:
+  # Sem fixar a versão, `corepack enable` baixa o pnpm mais recente — que hoje
+  # exige Node >= 22.13 e quebra na imagem node:20 com ERR_UNKNOWN_BUILTIN_MODULE
+  # (node:sqlite). Mesma versão que a plataforma usa.
+  PNPM_VERSION: '9.12.3'
+  BUCKET: topaz-tooling-deploy-artifacts-029765331397
+  AWS_REGION: us-east-1
+
+# ── Portões de qualidade ─────────────────────────────────────────────────────
+#
+# Até aqui a pipeline só compilava: install, build, pack. Build verde não é
+# sinal de que o SDK funciona — `instrumentMcpServer` passou meses devolvendo o
+# servidor intacto para a classe `Server` do MCP, sem emitir um único span, com
+# typecheck, lint e build todos passando. Quem pegava isso era a suíte, e a
+# suíte nunca rodou aqui: repare que os jobs de build levavam ~25s, tempo que
+# não dá para 214 testes.
+#
+# Roda ANTES do build de propósito — falhar em um minuto custa menos que
+# empacotar e publicar um artefato quebrado para os integradores.
+quality:
+  stage: quality
+  image: node:20-bookworm
+  script:
+    - corepack enable
+    - corepack prepare pnpm@${PNPM_VERSION} --activate
+    - pnpm install --frozen-lockfile
+    - pnpm run typecheck
+    - pnpm run lint
+    - pnpm test
+
+# ── Portão de qualidade do lado Python ───────────────────────────────────────
+#
+# O SDK tem duas implementações, e só a de TypeScript tinha portão. O Python
+# repetiu o mesmo bug do MCP — e pior: `instrument_mcp_server` renomeava toda
+# tool do FastMCP para `traced_handler` e destruía o inputSchema. Quebrava o
+# servidor, não só a telemetria, e ninguém rodava a suíte que pegaria isso.
+#
+# Só `pytest`. `ruff` e `mypy` ficam de fora por ora: acusam 382 e 11 achados
+# pré-existentes, sem config no pyproject. Ligar os dois é trabalho próprio, e
+# fingir um portão verde escondendo isso com `|| true` seria pior que não ter.
+quality-python:
+  stage: quality
+  image: python:3.12-slim
+  script:
+    - pip install --no-cache-dir "./py[dev]"
+    - python -m pytest py/tests -q
+
+# ── Compila o TypeScript e gera o tarball npm ────────────────────────────────
+build-tarball:
+  stage: build
+  image: node:20-bookworm
+  script:
+    - corepack enable
+    - corepack prepare pnpm@${PNPM_VERSION} --activate
+    # --frozen-lockfile: build reproduzível. Sem lockfile versionado, o CI
+    # resolvia versões diferentes a cada run — foi assim que instalou
+    # typescript 5.9.3 onde o package.json pede ^5.6.3.
+    - pnpm install --frozen-lockfile
+    - pnpm run build
+    # Confere a superfície pública contra etc/pump-evolution.api.md e falha se
+    # divergir. O relatório existe para que mudança de contrato apareça no diff
+    # da MR — mas ficou 56 exports atrás porque nenhum job o executava, e o
+    # `api:check` do package.json refaz o build inteiro só para chegar aqui.
+    # Rodando o extractor direto, aproveita o dist que a linha acima gerou.
+    # Divergiu? `pnpm api:extract` e commite o etc/.
+    - npx api-extractor run
+    - npm pack
+  artifacts:
+    paths:
+      - topaz-ia-pump-evolution-*.tgz
+    expire_in: 1 day
+
+# ── Monta o vendor zip a partir do repositório ───────────────────────────────
+#
+# `--skip-build` porque o tarball vem do job anterior. A receita confere as
+# versões declaradas e falha se divergirem — publicar um artefato que mente
+# sobre a própria versão atrapalha todo diagnóstico depois.
+#
+# A versão sai daqui como dotenv, em vez de ser extraída no shell do job de
+# publicação: `sed` com backreference dentro de YAML dentro de shell já custou
+# um arquivo corrompido, e não traz retorno nenhum. Aqui é uma linha de Python
+# lendo o package.json.
+package-zip:
+  stage: package
+  image: python:3.12-slim
+  needs:
+    - build-tarball
+  script:
+    - python scripts/build_vendor_zip.py --skip-build
+    - python -c "import json; print('VERSAO=' + json.load(open('package.json'))['version'])" > versao.env
+    - cat versao.env
+  artifacts:
+    paths:
+      - dist-zip/pump-evolution-latest.zip
+    reports:
+      dotenv: versao.env
+    expire_in: 1 week
+
+# ── Publica no S3 da conta ───────────────────────────────────────────────────
+#
+# Sem assume-role e sem OIDC: o runner no Kubernetes já roda com credencial AWS
+# anexada, e é assim que TODA a pipeline da plataforma opera — ela registra task
+# definitions e faz deploy em produção chamando `aws` direto, sem configurar
+# credencial nenhuma.
+#
+# A tentativa anterior montou federação OIDC do zero (role, trust policy,
+# audiência) e falhou com InvalidIdentityToken. Era mecanismo que este ambiente
+# não usa. Publicar um zip não justifica infraestrutura de identidade própria
+# quando existe um caminho comprovado ao lado.
+#
+# Contrapartida assumida: a credencial do runner é compartilhada entre projetos
+# com a tag `eks`. O OIDC amarraria a publicação a este repositório e a este
+# branch; sem ele, a fronteira é a mesma que a plataforma já aceita para deploy
+# em produção.
+#
+# ── Permissões que o usuário de CI precisa (IAM: gitlab-cicd-sdk, conta 029765331397)
+#
+# Não basta escrever. O guard abaixo pergunta ao S3 se a chave já existe, e para
+# isso são DUAS permissões no bucket de artefatos:
+#
+#   s3:PutObject    em .../sdk/*   — publicar
+#   s3:GetObject    em .../sdk/*   — ler a chave
+#   s3:ListBucket   no bucket      — saber se ela existe
+#
+# O `ListBucket` não é redundante: sem ele o `HeadObject` responde 403 mesmo para
+# chave inexistente (o S3 esconde a existência de quem não pode listar), em vez
+# de 404. Foi o que aconteceu em 27/08/2026 — o guard não conseguia distinguir
+# "não existe" de "não posso ver", e a primeira versão dele publicou por cima em
+# silêncio por causa disso.
+#
+# Este usuário NÃO está em Terraform nenhum (nem aqui nem no repo da plataforma),
+# então a policy é aplicada à mão e não aparece em `plan` de ninguém. Por isso
+# está escrita aqui, junto do código que depende dela.
+#
+# Duas chaves: a versionada dá rastreabilidade e rollback; a `latest` é a que a
+# API lê — o caminho é fixo em sdk.ts. As duas saem a cada merge em `main`.
+# O bucket tem versionamento ligado, então uma publicação ruim é reversível.
+publish-s3:
+  stage: publish
+  image: amazon/aws-cli:latest
+  needs:
+    - package-zip
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - |
+      if [ -z "${VERSAO}" ]; then
+        echo "VERSAO nao veio do job package-zip. Sem publicar."
+        exit 1
+      fi
+      echo "Publicando a versao ${VERSAO}"
+      echo "Identidade do runner: $(aws sts get-caller-identity --query Arn --output text)"
+
+      ZIP=dist-zip/pump-evolution-latest.zip
+      CHAVE="sdk/pump-evolution-${VERSAO}.zip"
+
+      # A chave versionada existe para dar rastreabilidade e rollback -- e nao da
+      # nenhuma das duas se o mesmo numero nomear dois conteudos. Aconteceu duas
+      # vezes em dois dias: a 0.0.3 foi republicada com a correcao do MCP no
+      # TypeScript, e a 0.0.4 com a do Python, ambas por merge sem bump. Nada se
+      # perdeu (o bucket tem versionamento), mas "qual 0.0.4 esta neste vendor?"
+      # virou pergunta sem resposta -- exatamente o tipo de ambiguidade que custa
+      # uma sessao de diagnostico depois.
+      #
+      # Falhar aqui e barato: bumpe a versao e mergeie de novo.
+      #
+      # Sao TRES respostas possiveis do head-object, e a primeira versao deste
+      # guard colapsava as tres em `if ... >/dev/null 2>&1`. Resultado: qualquer
+      # erro -- inclusive 403 por a credencial de CI nao ter GetObject -- era
+      # lido como "a chave nao existe", e o guard publicava por cima em silencio.
+      # Foi o que aconteceu no merge de 24c4dbe: nem uma linha sobre a
+      # verificacao no log, e a 0.0.5 sobrescrita. Um portao que degrada em
+      # silencio nao e portao.
+      SAIDA_HEAD=$(aws s3api head-object --bucket "${BUCKET}" --key "${CHAVE}" --region "${AWS_REGION}" 2>&1) && CODIGO_HEAD=0 || CODIGO_HEAD=$?
+
+      if [ "${CODIGO_HEAD}" -eq 0 ]; then
+        # 1) A chave existe. Republicar trocaria o conteudo de uma versao ja
+        #    entregue aos integradores.
+        if [ "${REPUBLICAR:-false}" != "true" ]; then
+          echo "ERRO: ${CHAVE} ja existe no bucket."
+          echo "Republicar sobrescreveria um artefato publicado com outro conteudo."
+          echo "Bumpe a versao (package.json, py/pyproject.toml, py/pump_evolution/__init__.py"
+          echo "e o SDK_USER_AGENT em src/otlp-exporter.ts) e mergeie de novo."
+          echo "Se a republicacao for mesmo intencional, rode a pipeline com REPUBLICAR=true."
+          exit 1
+        fi
+        echo "AVISO: ${CHAVE} ja existia e sera sobrescrita (REPUBLICAR=true)."
+      elif echo "${SAIDA_HEAD}" | grep -qiE '(^|[^0-9])404([^0-9]|$)|Not Found'; then
+        # 2) Nao existe. E o caso normal de uma versao nova.
+        echo "Chave ${CHAVE} ainda nao existe no bucket -- publicando."
+      else
+        # 3) Nao deu para verificar. Sem saber, nao da para proteger nada, entao
+        #    parar e mostrar o erro cru da AWS e melhor que publicar no escuro.
+        #    Se for AccessDenied, a correcao e dar s3:GetObject ao usuario de CI
+        #    no prefixo sdk/* -- e nao afrouxar esta checagem.
+        echo "ERRO: nao foi possivel verificar se ${CHAVE} ja existe (exit ${CODIGO_HEAD})."
+        echo "Resposta da AWS:"
+        echo "${SAIDA_HEAD}"
+        echo
+        echo "Sem conseguir ler a chave, o guard nao consegue impedir a sobrescrita."
+        echo "Se for AccessDenied: conceda s3:GetObject em ${BUCKET}/sdk/* ao usuario de CI."
+        exit 1
+      fi
+
+      aws s3 cp "$ZIP" "s3://${BUCKET}/${CHAVE}" --region "${AWS_REGION}"
+      echo "Publicado: ${CHAVE}"
+
+      # A latest sai por PADRAO. O merge em main E a decisao de publicar -- exigir
+      # um interruptor a mais so criava um jeito silencioso de a latest ficar
+      # velha: a pipeline passava verde, a versionada subia, e ninguem percebia
+      # que o portal seguia servindo o artefato anterior. Aconteceu duas vezes.
+      #
+      # PULAR_LATEST=true existe para o caso raro de querer publicar so a
+      # versionada e conferir antes de trocar o que os integradores baixam.
+      # Foi assim que estreamos esta pipeline.
+      if [ "${PULAR_LATEST:-false}" = "true" ]; then
+        echo "latest NAO promovida (PULAR_LATEST=true)."
+        echo "Para promover depois de conferir, rode a pipeline sem essa variavel."
+        echo "  aws s3 cp s3://${BUCKET}/sdk/pump-evolution-${VERSAO}.zip ./novo.zip"
+      else
+        aws s3 cp "$ZIP" "s3://${BUCKET}/sdk/pump-evolution-latest.zip" --region "${AWS_REGION}"
+        echo "Promovido para sdk/pump-evolution-latest.zip"
+      fi
+  environment:
+    name: tooling
