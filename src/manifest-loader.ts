@@ -37,6 +37,9 @@ import type {
   DataClassification,
   ItemKind,
   ManifestOwner,
+  ManifestCognito,
+  ManifestManagedRuntime,
+  ManifestModel,
   ManifestRuntime,
   ManifestTelemetry,
   ResourceAttributes,
@@ -211,6 +214,132 @@ function parseTelemetry(value: unknown, origin: string): ManifestTelemetry | und
   return { otelEndpoint, serviceAccountId };
 }
 
+/**
+ * Optional array of non-empty strings. Used by `runtime.cognito.identityProviders`,
+ * where absent and empty mean the same thing: no federated IdP on the pool.
+ */
+function optionalStringArray(value: unknown, field: string, origin: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    fail(origin, `field "${field}" must be an array when present, got ${describeType(value)}.`);
+  }
+  return value.map((item, index) => requireNonEmptyString(item, `${field}[${index}]`, origin));
+}
+
+/**
+ * End-user login block (`runtime.cognito`), written by the platform when the App
+ * Client is provisioned.
+ *
+ * `domain`, `issuer`, `clientId`, `redirectUri` and `scopes` are REQUIRED once
+ * the block exists. A half-written block is worse than none: the login would
+ * fail later at the Hosted UI with an opaque message, instead of here, at load
+ * time, naming the field. The platform refuses to emit the block without them,
+ * so a partial one means someone edited it by hand.
+ */
+function parseCognito(value: unknown, origin: string): ManifestCognito | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    fail(
+      origin,
+      `field "runtime.cognito" must be an object when present, got ${describeType(value)}.`,
+    );
+  }
+  const identityProviders = optionalStringArray(
+    value.identityProviders,
+    'runtime.cognito.identityProviders',
+    origin,
+  );
+  const identityProvider = optionalNonEmptyString(
+    value.identityProvider,
+    'runtime.cognito.identityProvider',
+    origin,
+  );
+  const logoutRedirectUri = optionalNonEmptyString(
+    value.logoutRedirectUri,
+    'runtime.cognito.logoutRedirectUri',
+    origin,
+  );
+  return {
+    domain: requireNonEmptyString(value.domain, 'runtime.cognito.domain', origin),
+    issuer: requireNonEmptyString(value.issuer, 'runtime.cognito.issuer', origin),
+    clientId: requireNonEmptyString(value.clientId, 'runtime.cognito.clientId', origin),
+    redirectUri: requireNonEmptyString(value.redirectUri, 'runtime.cognito.redirectUri', origin),
+    scopes: requireNonEmptyString(value.scopes, 'runtime.cognito.scopes', origin),
+    ...(identityProviders !== undefined ? { identityProviders } : {}),
+    ...(identityProvider !== undefined ? { identityProvider } : {}),
+    ...(logoutRedirectUri !== undefined ? { logoutRedirectUri } : {}),
+  };
+}
+
+/**
+ * Managed-runtime block (`runtime.managed`), written by the portal/MCP when an
+ * external agent opts into the platform's managed AgentCore runtime. All four
+ * required fields (`endpoint`, `agentId`, `tokenUrl`) must be present once the
+ * block exists — same "no half-written block" rule as `runtime.cognito`: a
+ * partial block would fail later, opaquely, at invoke time.
+ */
+function parseManaged(value: unknown, origin: string): ManifestManagedRuntime | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    fail(
+      origin,
+      `field "runtime.managed" must be an object when present, got ${describeType(value)}.`,
+    );
+  }
+  const endpoint = requireNonEmptyString(value.endpoint, 'runtime.managed.endpoint', origin);
+  const agentId = requireNonEmptyString(value.agentId, 'runtime.managed.agentId', origin);
+  const tokenUrl = requireNonEmptyString(value.tokenUrl, 'runtime.managed.tokenUrl', origin);
+  const scope = optionalNonEmptyString(value.scope, 'runtime.managed.scope', origin);
+  return {
+    endpoint,
+    agentId,
+    tokenUrl,
+    ...(scope !== undefined ? { scope } : {}),
+  };
+}
+
+/**
+ * A single entry of `runtime.models` — a portal-written snapshot of the
+ * tenant's enabled Bedrock catalog. Only `modelId` is required; `name`,
+ * `provider` and `streaming` mirror whatever the catalog API returned at
+ * snapshot time and are omitted when absent (never placeholder-filled).
+ */
+function parseModelEntry(value: unknown, index: number, origin: string): ManifestModel {
+  if (!isRecord(value)) {
+    fail(origin, `field "runtime.models[${index}]" must be an object, got ${describeType(value)}.`);
+  }
+  const modelId = requireNonEmptyString(
+    value.modelId,
+    `runtime.models[${index}].modelId`,
+    origin,
+  );
+  const name = optionalNonEmptyString(value.name, `runtime.models[${index}].name`, origin);
+  const provider = optionalNonEmptyString(
+    value.provider,
+    `runtime.models[${index}].provider`,
+    origin,
+  );
+  const streaming = optionalBoolean(
+    value.streaming,
+    `runtime.models[${index}].streaming`,
+    origin,
+  );
+  return {
+    modelId,
+    ...(name !== undefined ? { name } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(streaming !== undefined ? { streaming } : {}),
+  };
+}
+
+function parseModels(value: unknown, origin: string): ManifestModel[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    fail(origin, `field "runtime.models" must be an array when present, got ${describeType(value)}.`);
+  }
+  return value.map((item, index) => parseModelEntry(item, index, origin));
+}
+
 function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) {
@@ -218,9 +347,15 @@ function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefin
   }
   const external = optionalBoolean(value.external, 'runtime.external', origin);
   const telemetry = parseTelemetry(value.telemetry, origin);
+  const cognito = parseCognito(value.cognito, origin);
+  const managed = parseManaged(value.managed, origin);
+  const models = parseModels(value.models, origin);
   return {
     ...(external !== undefined ? { external } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
+    ...(cognito !== undefined ? { cognito } : {}),
+    ...(managed !== undefined ? { managed } : {}),
+    ...(models !== undefined ? { models } : {}),
   };
 }
 

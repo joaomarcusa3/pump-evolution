@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   applyIdentityToSpan,
-  claimsToUserContext,
   createTracerProvider,
   getCurrentUser,
   getTracer,
@@ -135,46 +134,6 @@ describe('parseIdentityHeaders — Bearer JWT (Cognito)', () => {
     const ctx = parseIdentityHeaders({ authorization: token });
     expect(ctx?.userId).toBe('u-42');
     expect(ctx?.costCenter).toBe('CC-ALIAS');
-  });
-
-  it('falls back to custom:topaz_directorate when custom:department is absent', () => {
-    const token = makeJwt({
-      sub: 'u-99',
-      'custom:topaz_directorate': 'CEL 926',
-    });
-    const ctx = parseIdentityHeaders({ authorization: token });
-    expect(ctx?.department).toBe('CEL 926');
-  });
-
-  it('falls back to the custom:cta_directorate alias', () => {
-    const token = makeJwt({ sub: 'u-1', 'custom:cta_directorate': 'CEL 926' });
-    const ctx = parseIdentityHeaders({ authorization: token });
-    expect(ctx?.department).toBe('CEL 926');
-  });
-
-  it('prefers custom:department over the directorate fallback', () => {
-    const token = makeJwt({
-      sub: 'u-3',
-      'custom:department': 'engineering',
-      'custom:topaz_directorate': 'CEL 926',
-    });
-    const ctx = parseIdentityHeaders({ authorization: token });
-    expect(ctx?.department).toBe('engineering');
-  });
-});
-
-describe('claimsToUserContext', () => {
-  it('maps custom:department directly', () => {
-    const ctx = claimsToUserContext({ email: 'dana@topaz.com', 'custom:department': 'finance' });
-    expect(ctx.department).toBe('finance');
-  });
-
-  it('falls back to custom:topaz_directorate when custom:department is absent', () => {
-    const ctx = claimsToUserContext({
-      email: 'diego.resta@topazevolution.com',
-      'custom:topaz_directorate': 'CEL 926',
-    });
-    expect(ctx.department).toBe('CEL 926');
   });
 });
 

@@ -18,9 +18,9 @@ Leia o código antes de perguntar. Você precisa saber:
 - **Framework web:** FastAPI, Express, Flask, outro.
 - **Onde o app guarda o usuário logado.** Em FastAPI costuma ser
   `request.state.user`; pode ser outro lugar.
-- **Como é o login hoje** — qual Cognito/IdP autentica os usuários. O login passa
-  a usar o Cognito de usuário da conta de tooling; você vai precisar
-  saber onde plugar as rotas `/auth/*` e se há `SessionMiddleware`.
+- **Onde o app guarda o `id_token` do login** — banco, cookie, sessão,
+  cabeçalho. Pode não guardar; siga assim mesmo e avise o humano do efeito
+  (ver passo 5).
 - **Qual provider de modelo:** Bedrock, OpenAI, Anthropic direto, LangChain,
   vários.
 - **Se há shutdown gracioso** (handler de SIGTERM, evento de shutdown).
@@ -40,11 +40,6 @@ Leia o código antes de perguntar. Você precisa saber:
   projeto costuma ter vários clients Cognito para fins diferentes, e usar o
   errado não dá erro na hora — só telemetria que nunca chega.
 - **`tokenUrl`** — endpoint OAuth do Cognito da plataforma.
-- **Cognito de usuário (tooling)** — o App Client do agente provisionado no
-  install: `COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`, `COGNITO_REDIRECT_URI` e, se o
-  client for confidencial, `COGNITO_CLIENT_SECRET`. Saem do provisionamento
-  (Factory API), não de outro projeto — a callback URL precisa bater com a
-  registrada no App Client, senão o login quebra.
 
 Esses valores saem da aba **SDK & Telemetria** do componente no portal.
 
@@ -76,12 +71,6 @@ PUMP_EVOLUTION_ENABLED=true
 PUMP_SERVICE_ACCOUNT_CLIENT_ID=<client_id>
 PUMP_SERVICE_ACCOUNT_CLIENT_SECRET=<secret — Secrets Manager em produção>
 PUMP_SERVICE_ACCOUNT_TOKEN_URL=<tokenUrl>
-
-# Login do usuário no Cognito da tooling — do provisionamento:
-COGNITO_DOMAIN=<https://<prefixo>.auth.<region>.amazoncognito.com>
-COGNITO_CLIENT_ID=<app client do agente>
-COGNITO_REDIRECT_URI=<https://<seu-app>/auth/callback>
-COGNITO_CLIENT_SECRET=<secret do App Client, se confidencial — Secrets Manager>
 ```
 
 Sem `PUMP_EVOLUTION_ENABLED=true` o SDK é inerte: não faz nada, não custa nada,
@@ -92,41 +81,21 @@ não quebra nada. Use isso para introduzir a mudança com segurança.
 **Init uma vez no boot**, nunca por requisição. **Shutdown** no encerramento,
 para não perder o último lote.
 
-**Identidade do usuário (login no Cognito da tooling).** O login dos
-usuários DEVE usar o Cognito de usuário provisionado na conta de tooling da
-plataforma — é ele que carrega os claims de custo governados
-(`custom:department`, `custom:cost_center`). Se o serviço já tem Cognito próprio,
-ainda assim troque o login para o da tooling: o pool antigo não serve para
-atribuição de custo.
-
-Em FastAPI (Python), o SDK monta o login e entrega os resolvedores do middleware:
+**Identidade do usuário** — em FastAPI (Python) use o módulo pronto. Em Node
+não há middleware pronto: use `runWithIdentity` do pacote, envolvendo o
+tratamento da requisição depois que o auth do app resolveu quem é a pessoa.
 
 ```python
-from pump_evolution.integrations.cognito import CognitoLogin
 from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
 
-login = CognitoLogin.from_env()   # lê COGNITO_* (passo 2/4)
-login.install(app)                # /auth/login, /auth/callback, /auth/logout
-app.add_middleware(
-    PumpIdentityMiddleware,
-    user_resolver=login.user_resolver,
-    id_token_resolver=login.id_token_resolver,
-)
-# Requer SessionMiddleware montado (guarda state/PKCE e o id_token).
+app.add_middleware(PumpIdentityMiddleware)
 ```
 
-Em Node, use `CognitoLogin.fromEnv()` + `login.expressRoutes()` para montar
-`/auth/login|callback|logout`, e por requisição propague com
-`pump.withUser(login.userContextFromIdToken(req.session.pumpIdToken), () => ...)`
-(ou `runWithIdentity` se o consumo for por Bearer). Não há middleware pronto no
-Node.
-
-Se o app JÁ tem um login e você não vai usar as rotas prontas, tudo bem usar as
-primitivas (`authorize_url`/`exchange_code`) — mas o login **precisa** ser contra
-o pool da tooling, e o `id_token_resolver` deve apontar para onde você guardou
-esse `id_token`. **Sem o `id_token` do pool da tooling, o span sai com o usuário
-certo e sem departamento**, e o custo fica incompleto. Se faltar alguma variável
-`COGNITO_*`, pare e peça ao humano — não invente.
+Se o app guarda o usuário fora de `request.state.user`, passe `user_resolver`.
+Se guarda o `id_token`, passe `id_token_resolver` — é o que traz `department` e
+`cost_center` para os spans. **Sem o `id_token`, o span sai com o usuário certo
+e sem departamento**, e o custo por centro de custo fica incompleto. Avise o
+humano se for esse o caso.
 
 **Bedrock** é automático: `handle.instrument_bedrock(client)` logo após criar o
 client boto3.
@@ -170,12 +139,10 @@ Node esse aviso ainda não existe — ali a validação do passo 6 é a única r
 **Departamento não é grupo de acesso.** `Administrador` é papel no app; o
 departamento vem dos claims `custom:department` ou `custom:topaz_directorate`.
 
-**Duas identidades, ambas da plataforma.** O login do usuário usa o
-Cognito de usuário na conta de **tooling** (App Client por agente, provisionado no
-install); o envio de telemetria usa um service account M2M separado. São
-credenciais distintas e não se cruzam entre si. Você TROCA o login do serviço para
-o pool da tooling — não federe o pool antigo, não crie um trust: crie do zero se
-não havia, crie na tooling e use o novo se havia.
+**Dois Cognitos não se cruzam.** O serviço mantém o login dele, seja qual for o
+provedor. O SDK usa um service account separado só para enviar telemetria. Não
+federe nada, não crie usuário no Cognito da plataforma, não altere o auth do
+app.
 
 **Rede fecha o caminho.** Se o processo roda em subnet privada sem rota para o
 endpoint, o export falha em silêncio. Teste de dentro do ambiente real:
@@ -190,9 +157,9 @@ disso é que ela some sem avisar — por isso o passo 6 não é opcional.
 
 ## O que NÃO fazer
 
-- Deixar o login do usuário no Cognito antigo do serviço quando ele deveria usar o
-  pool da tooling (o pool antigo não carrega os claims de custo governados)
-- Federar o Cognito antigo do serviço com o pool da tooling — é troca de login, não federação
-- Reusar o service account M2M de telemetria como login de usuário (ou vice-versa)
-- Commitar o `.env`, o `client_secret` ou o `COGNITO_CLIENT_SECRET`
+- Federar Cognitos entre o serviço e a plataforma
+- Mudar o login do serviço
+- Criar usuários no Cognito da plataforma
+- Alterar claims no Cognito do serviço
+- Commitar o `.env` ou o `client_secret`
 - Declarar pronto sem ter visto `accepted: 1`

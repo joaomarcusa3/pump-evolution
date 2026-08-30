@@ -1,61 +1,62 @@
-"""Login OAuth2 (Authorization Code + PKCE) com o Cognito de usuário da plataforma.
+"""cognito — login OAuth2 (Authorization Code + PKCE) do usuário final contra o
+pool Cognito da plataforma. Paridade 1:1 com `src/cognito-login.ts`.
 
-## Por que este módulo existe
+## Por que existe
 
-Até aqui a orientação era "não mude o Cognito do agente — o SDK só lê o
-`id_token` que ele já tem". Isso funcionava quando o Cognito do agente carregava
-os claims de custo (`custom:department`, `custom:cost_center`). Na prática quase
-nenhum carregava, e o span saía com o usuário certo e SEM departamento — ou seja,
-sem a atribuição de custo, que é a razão de a governança existir.
+A orientação antiga era "não mexa no Cognito do agente — o SDK só lê o `id_token`
+que ele já tem". Só que quase nenhum pool de cliente carregava os claims de custo
+(`custom:department`, `custom:cost_center`), então o span saía com o usuário certo
+e SEM departamento — perdendo a atribuição de custo, que é a razão de a governança
+existir.
 
-A solução resolve isso na raiz: o **User Pool de usuário final vive na conta de
-tooling da plataforma**, com os claims de custo governados por nós. O agente
-troca o login dele para esse pool. Assim TODO usuário logado carrega
-`department`/`cost_center` confiáveis, sem depender de como o cliente configurou
-o Cognito dele.
+A solução: o pool de usuário final vive na plataforma, com os claims de custo
+governados por nós, e cada componente ganha seu App Client. O client é
+provisionado no install pela Factory (`cta_factory_provisionar_cognito`), que
+grava `runtime.cognito` no manifesto e devolve as variáveis `COGNITO_*`. Este
+módulo é o consumidor desse contrato — ele nunca provisiona nada.
 
-O App Client desse agente é provisionado no INSTALL (via Factory API), não no
-registro — o instalador coleta as callback URLs do app real antes de criar o
-client. As variáveis abaixo saem desse provisionamento.
+## Duas identidades que nunca se cruzam
 
-## O que este módulo faz
+Este é o login das PESSOAS que usam o componente. O service account de telemetria
+(`PumpEvolution.init`, `client_credentials`) autentica o PROCESSO. Um token de
+`client_credentials` não tem usuário e portanto não tem departamento — que é
+exatamente por que esta segunda identidade precisou existir.
 
-Fecha o laço do login: adiciona três rotas ao app FastAPI/Starlette —
+## Uso
 
-    /auth/login      → redireciona para o Hosted UI do Cognito
-    /auth/callback   → troca o `code` por tokens, guarda o `id_token` na sessão
-    /auth/logout     → encerra a sessão local e no Cognito
-
-E entrega os dois resolvedores que o `PumpIdentityMiddleware` consome, fechando
-o circuito identidade → span:
+Do manifesto, que é onde a Factory grava tudo (preferido — nada copiado à mão, e
+o bloco é git-safe):
 
     from pump_evolution.integrations.cognito import CognitoLogin
     from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
 
-    login = CognitoLogin.from_env()          # lê COGNITO_* do ambiente
-    login.install(app)                       # monta /auth/login|callback|logout
+    login = CognitoLogin.from_manifest("./manifest.yaml")
+    login.install(app)                # /auth/login, /auth/callback, /auth/logout
     app.add_middleware(
         PumpIdentityMiddleware,
         user_resolver=login.user_resolver,
         id_token_resolver=login.id_token_resolver,
     )
 
-Requer `SessionMiddleware` (starlette) montado no app — é onde o `id_token` fica
-guardado entre a callback e as requisições seguintes. Sem ele, `install()` avisa
-com mensagem clara em vez de falhar em runtime no meio de um login.
+Ou do ambiente, com `CognitoLogin.from_env()`. Requer `SessionMiddleware` montado
+— é a sessão que guarda `state`, o verifier do PKCE e o `id_token`.
 
 ## Segurança
 
-- **PKCE (S256) sempre** + parâmetro `state` — protege contra interceptação de
-  código e CSRF no callback, mesmo com client confidencial.
-- O `client_secret` só viaja no Basic auth da troca de token (server-to-server,
-  TLS) — nunca vai para o browser.
-- O `id_token` é decodificado SEM verificar assinatura (mesmo contrato do resto
-  do SDK: cliente lê, o receiver verifica). A confiança vem da troca de código
-  autenticada contra o token endpoint do Cognito sobre TLS.
+- PKCE (S256) sempre, mais `state` — protege contra interceptação de código e CSRF.
+- `client_secret` só no Basic auth da troca de token (server-to-server, TLS). O
+  client público (default da plataforma) não tem secret.
+- O `id_token` é decodificado SEM verificar assinatura, que é a permissão padrão
+  para token obtido direto do token endpoint sobre TLS (OIDC Core 3.1.3.7). `iss`,
+  `aud` e `exp` SÃO conferidos — são baratos e pegam sessão velha, coisa que a
+  assinatura não pegaria. Para verificar token que CHEGA de um chamador, use o
+  `ConsumerTokenVerifier` (RS256 + JWKS).
+- Redirect pós-login restrito a caminho same-site. `//evil.com` e `/\\evil.com`
+  são rejeitados, não só `https://evil.com` — URL protocol-relative começa com
+  `/` e passaria numa checagem ingênua.
 
-Falha de LOGIN devolve resposta de erro clara (login é crítico para o app) — ao
-contrário da telemetria, que degrada em silêncio.
+Erro de CONFIG lança no boot. Falha em runtime devolve motivo E reporta no logger
+— login é crítico, não degrada em silêncio como telemetria.
 """
 
 from __future__ import annotations
@@ -63,33 +64,23 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import secrets
-import urllib.error
-import urllib.parse
-import urllib.request
+import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from ..identity_context import _decode_jwt_payload, claims_to_user_context
+from ..identity_context import claims_to_user_context
+from ..manifest_loader import load_manifest
 from ..types import UserContext
 
-try:  # pragma: no cover - depende do app hospedeiro
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse, RedirectResponse, Response
-except ImportError as erro:  # pragma: no cover
-    raise ImportError(
-        "pump_evolution.integrations.cognito exige starlette (instalado junto "
-        "com fastapi). Instale o app com FastAPI ou use o SDK sem este módulo."
-    ) from erro
-
-
-# Chaves de sessão. Prefixadas para não colidir com o que o app já guarda.
-_SESSION_USER = "pump_cognito_user"
-_SESSION_ID_TOKEN = "pump_cognito_id_token"
+# Chaves de sessão — mesmas do TypeScript, com o prefixo do SDK para não colidir
+# com o que o app do dono já guarda.
 _SESSION_STATE = "pump_cognito_state"
-_SESSION_VERIFIER = "pump_cognito_pkce_verifier"
+_SESSION_VERIFIER = "pump_cognito_verifier"
 _SESSION_NEXT = "pump_cognito_next"
+_SESSION_ID_TOKEN = "pump_id_token"
 
 _DEFAULT_SCOPES = "openid email profile"
 _TOKEN_TIMEOUT_S = 10
@@ -99,229 +90,170 @@ def _b64url_no_pad(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+def _nao_vazio(v: Any) -> bool:
+    return isinstance(v, str) and v.strip() != ""
+
+
+def safe_next_path(value: Any) -> str:
+    """Destino pós-login, restrito a caminho same-site.
+
+    `startswith("/")` sozinho NÃO basta: `//evil.com` e `/\\evil.com` passam, e o
+    browser lê os dois como URL protocol-relative — open redirect num usuário JÁ
+    AUTENTICADO, que é o pior momento para um.
+    """
+    if not isinstance(value, str) or value == "":
+        return "/"
+    if not value.startswith("/"):
+        return "/"
+    if value.startswith("//") or value.startswith("/\\"):
+        return "/"
+    return value
+
+
 @dataclass(frozen=True)
 class CognitoLoginConfig:
-    """Config do login. Todos os campos exceto `client_secret` e
-    `logout_redirect_uri` são obrigatórios — ZERO fallback silencioso: uma URL de
-    domínio ou redirect ausente faz o login apontar para o lugar errado sem erro
-    visível, exatamente o modo de falha que a governança de custo existe para eliminar."""
+    """Configuração do login. Os três primeiros campos são obrigatórios — sem
+    eles o login apontaria para o lugar errado sem erro."""
 
-    domain: str  # ex.: https://<prefixo>.auth.us-east-1.amazoncognito.com
+    domain: str
     client_id: str
-    redirect_uri: str  # URL absoluta do /auth/callback registrada no App Client
-    client_secret: Optional[str] = None  # só para App Client confidencial
+    redirect_uri: str
+    #: Emissor do token. Quando presente, o claim `iss` do `id_token` é conferido
+    #: contra ele — token de outro pool é recusado em vez de virar identidade.
+    issuer: Optional[str] = None
+    client_secret: Optional[str] = None
     scopes: str = _DEFAULT_SCOPES
     logout_redirect_uri: Optional[str] = None
+    #: Provedor federado a mandar no `/oauth2/authorize`, para cair direto no SSO.
+    #: A plataforma só o emite com EXATAMENTE UM federado no pool; com dois ou
+    #: mais ele é omitido de propósito, porque adivinhar mandaria a pessoa para o
+    #: SSO errado. A ausência é informação.
+    identity_provider: Optional[str] = None
+    #: Para onde as falhas de login são reportadas. Sem ele, um 401 na troca de
+    #: token vira um redirect indistinguível de sucesso.
+    logger: Any = None
+    #: Relógio injetável, para testar a checagem de `exp`.
+    now: Optional[Callable[[], float]] = None
+    #: HTTP injetável (assinatura de `urllib.request.urlopen`), para testes.
+    urlopen_impl: Optional[Callable[..., Any]] = None
 
     def __post_init__(self) -> None:
         faltando = [
             nome
-            for nome, valor in (
-                ("domain", self.domain),
-                ("client_id", self.client_id),
-                ("redirect_uri", self.redirect_uri),
-            )
-            if not (isinstance(valor, str) and valor.strip())
+            for nome in ("domain", "client_id", "redirect_uri")
+            if not _nao_vazio(getattr(self, nome))
         ]
         if faltando:
             raise ValueError(
-                "CognitoLoginConfig incompleto: faltam "
+                "[pump-evolution] CognitoLogin: config incompleto ("
                 + ", ".join(faltando)
-                + ". Esses valores saem do provisionamento do App Client (Factory API) "
-                "e vão no .env do app — não invente."
+                + "). Esses valores saem do provisionamento do App Client (Factory API) e "
+                "chegam em `runtime.cognito` do manifesto ou no `.env` do app. Sem fallback."
             )
-        object.__setattr__(self, "domain", self.domain.rstrip("/"))
 
 
 class CognitoLogin:
-    """Wiring de login OAuth2 code flow contra o Cognito da plataforma.
-
-    Instâncias são baratas e sem estado próprio (o estado do fluxo mora na sessão
-    do request). Construa uma vez no boot e reutilize.
-    """
+    """Login de usuário final. Consome o que a Factory provisiona; não provisiona."""
 
     def __init__(self, config: CognitoLoginConfig) -> None:
         self._cfg = config
+        self._domain = config.domain.rstrip("/")
+        self._now = config.now or time.time
+        self._urlopen = config.urlopen_impl or urlopen
 
-    # ─── Construção ─────────────────────────────────────────────────────────
+    # ─── Construtores ────────────────────────────────────────────────────────
 
     @classmethod
-    def from_env(cls, env: Optional[dict] = None) -> "CognitoLogin":
-        """Constrói a partir das variáveis `COGNITO_*` do ambiente.
-
-        Variáveis (as três primeiras obrigatórias):
-          - `COGNITO_DOMAIN` — domínio do Hosted UI
-          - `COGNITO_CLIENT_ID` — App Client provisionado para este agente
-          - `COGNITO_REDIRECT_URI` — URL absoluta do callback (/auth/callback)
-          - `COGNITO_CLIENT_SECRET` — opcional, para App Client confidencial
-          - `COGNITO_SCOPES` — opcional (default "openid email profile")
-          - `COGNITO_LOGOUT_REDIRECT_URI` — opcional, para onde voltar após logout
+    def from_manifest(
+        cls,
+        manifest: Any,
+        env: Optional[Dict[str, Optional[str]]] = None,
+        **overrides: Any,
+    ) -> "CognitoLogin":
+        """Monta a partir de `runtime.cognito` do manifesto — o bloco que a
+        Factory grava ao provisionar o App Client. Preferido ao `from_env`: nada
+        é copiado à mão e o bloco é git-safe (a plataforma nunca escreve secret
+        lá; um client confidencial segue lendo `COGNITO_CLIENT_SECRET` do
+        ambiente).
         """
-        src = env if env is not None else os.environ
-        cfg = CognitoLoginConfig(
-            domain=str(src.get("COGNITO_DOMAIN", "")),
-            client_id=str(src.get("COGNITO_CLIENT_ID", "")),
-            redirect_uri=str(src.get("COGNITO_REDIRECT_URI", "")),
-            client_secret=(src.get("COGNITO_CLIENT_SECRET") or None),
-            scopes=str(src.get("COGNITO_SCOPES") or _DEFAULT_SCOPES),
-            logout_redirect_uri=(src.get("COGNITO_LOGOUT_REDIRECT_URI") or None),
+        import os
+
+        carregado = load_manifest(manifest) if isinstance(manifest, str) else manifest
+        runtime = getattr(carregado, "runtime", None)
+        cognito = getattr(runtime, "cognito", None) if runtime is not None else None
+        if cognito is None:
+            raise ValueError(
+                "[pump-evolution] CognitoLogin.from_manifest: o manifesto não tem "
+                "`runtime.cognito`. Provisione o App Client de login primeiro (Factory: "
+                "`cta_factory_provisionar_cognito`), que é quem grava esse bloco. Sem fallback."
+            )
+        ambiente = os.environ if env is None else env
+        segredo = ambiente.get("COGNITO_CLIENT_SECRET")
+        return cls(
+            CognitoLoginConfig(
+                domain=getattr(cognito, "domain", "") or "",
+                client_id=getattr(cognito, "client_id", "") or "",
+                redirect_uri=getattr(cognito, "redirect_uri", "") or "",
+                issuer=getattr(cognito, "issuer", None),
+                scopes=getattr(cognito, "scopes", None) or _DEFAULT_SCOPES,
+                identity_provider=getattr(cognito, "identity_provider", None),
+                logout_redirect_uri=getattr(cognito, "logout_redirect_uri", None),
+                # O manifesto nunca carrega o secret -- um client confidencial le
+                # do ambiente, igual ao service account de telemetria.
+                client_secret=segredo if _nao_vazio(segredo) else None,
+                **overrides,
+            )
         )
-        return cls(cfg)
 
-    # ─── Instalação das rotas ─────────────────────────────────────────────────
+    @classmethod
+    def from_env(
+        cls, env: Optional[Dict[str, Optional[str]]] = None, **overrides: Any
+    ) -> "CognitoLogin":
+        """Monta a partir do bloco `COGNITO_*` que a Factory imprime. Obrigatórias:
+        `COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`, `COGNITO_REDIRECT_URI`."""
+        import os
 
-    def install(self, app: Any, *, prefix: str = "/auth") -> None:
-        """Monta `/auth/login`, `/auth/callback` e `/auth/logout` no app.
+        src = os.environ if env is None else env
 
-        Funciona em qualquer app da família Starlette (FastAPI incluído) via
-        `add_route`. Avisa se `SessionMiddleware` não estiver presente — o login
-        depende da sessão para guardar `state`/PKCE e o `id_token`.
-        """
-        self._warn_if_no_session(app)
-        base = prefix.rstrip("/")
-        app.add_route(f"{base}/login", self._login, methods=["GET"])
-        app.add_route(f"{base}/callback", self._callback, methods=["GET"])
-        app.add_route(f"{base}/logout", self._logout, methods=["GET"])
+        def opcional(chave: str) -> Optional[str]:
+            valor = src.get(chave)
+            return valor if _nao_vazio(valor) else None
 
-    @staticmethod
-    def _warn_if_no_session(app: Any) -> None:
-        try:
-            classes = " ".join(
-                type(m).__name__ + getattr(m, "cls", type("", (), {})).__name__
-                for m in getattr(app, "user_middleware", [])
+        return cls(
+            CognitoLoginConfig(
+                domain=src.get("COGNITO_DOMAIN") or "",
+                client_id=src.get("COGNITO_CLIENT_ID") or "",
+                redirect_uri=src.get("COGNITO_REDIRECT_URI") or "",
+                issuer=opcional("COGNITO_ISSUER"),
+                client_secret=opcional("COGNITO_CLIENT_SECRET"),
+                scopes=opcional("COGNITO_SCOPES") or _DEFAULT_SCOPES,
+                identity_provider=opcional("COGNITO_IDENTITY_PROVIDER"),
+                logout_redirect_uri=opcional("COGNITO_LOGOUT_REDIRECT_URI"),
+                **overrides,
             )
-        except Exception:
-            classes = ""
-        if "SessionMiddleware" not in classes:
-            import warnings
+        )
 
-            warnings.warn(
-                "pump_evolution.integrations.cognito: SessionMiddleware não detectado. "
-                "Adicione `app.add_middleware(SessionMiddleware, secret_key=...)` — o login "
-                "guarda state/PKCE e o id_token na sessão.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+    @property
+    def issuer(self) -> Optional[str]:
+        """Emissor do token, quando configurado. Útil para ligar um
+        `ConsumerTokenVerifier`."""
+        return self._cfg.issuer
 
-    # ─── Resolvedores para o PumpIdentityMiddleware ───────────────────────────
+    # ─── Primitivas ──────────────────────────────────────────────────────────
 
-    def user_resolver(self, request: "Request") -> Optional[dict]:
-        """Devolve o usuário logado a partir da sessão (dict com `user_id`,
-        `department`, `cost_center`), ou None se ninguém logou ainda."""
-        try:
-            return request.session.get(_SESSION_USER)
-        except Exception:
-            return None
-
-    async def id_token_resolver(self, request: "Request", _email: Optional[str]) -> Optional[str]:
-        """Devolve o `id_token` guardado na sessão — é dele que o middleware extrai
-        `department`/`cost_center` para os spans."""
-        try:
-            return request.session.get(_SESSION_ID_TOKEN)
-        except Exception:
-            return None
-
-    # ─── Handlers das rotas ───────────────────────────────────────────────────
-
-    async def _login(self, request: "Request") -> "Response":
-        sessao = self._session_or_error(request)
-        if sessao is None:
-            return self._session_missing_response()
-
+    def create_pkce(self) -> Dict[str, str]:
+        """Par PKCE: verifier fica na sessão, challenge vai na URL de autorização."""
         verifier = _b64url_no_pad(secrets.token_bytes(32))
         challenge = _b64url_no_pad(hashlib.sha256(verifier.encode("ascii")).digest())
-        state = secrets.token_urlsafe(24)
+        return {"verifier": verifier, "challenge": challenge}
 
-        sessao[_SESSION_STATE] = state
-        sessao[_SESSION_VERIFIER] = verifier
-        # Para onde voltar depois do login (default "/"). Só aceita caminho
-        # relativo — nunca um host externo (open-redirect).
-        destino = request.query_params.get("next", "/")
-        sessao[_SESSION_NEXT] = destino if destino.startswith("/") else "/"
-
-        params = {
-            "response_type": "code",
-            "client_id": self._cfg.client_id,
-            "redirect_uri": self._cfg.redirect_uri,
-            "scope": self._cfg.scopes,
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-        url = f"{self._cfg.domain}/oauth2/authorize?" + urllib.parse.urlencode(params)
-        return RedirectResponse(url, status_code=302)
-
-    async def _callback(self, request: "Request") -> "Response":
-        sessao = self._session_or_error(request)
-        if sessao is None:
-            return self._session_missing_response()
-
-        erro = request.query_params.get("error")
-        if erro:
-            desc = request.query_params.get("error_description", "")
-            return JSONResponse(
-                {"error": "cognito_error", "detail": f"{erro}: {desc}".strip(": ")}, status_code=400
-            )
-
-        code = request.query_params.get("code")
-        state = request.query_params.get("state")
-        esperado = sessao.pop(_SESSION_STATE, None)
-        verifier = sessao.pop(_SESSION_VERIFIER, None)
-        if not code or not state or state != esperado or not verifier:
-            return JSONResponse(
-                {"error": "invalid_state", "detail": "state/PKCE inválido ou expirado — refaça o login"},
-                status_code=400,
-            )
-
-        tokens = self._exchange_code(code, verifier)
-        if tokens is None:
-            return JSONResponse(
-                {"error": "token_exchange_failed", "detail": "não foi possível trocar o code por tokens"},
-                status_code=502,
-            )
-
-        id_token = tokens.get("id_token")
-        if not isinstance(id_token, str) or not id_token:
-            return JSONResponse(
-                {"error": "no_id_token", "detail": "resposta do Cognito sem id_token"}, status_code=502
-            )
-
-        claims = _decode_jwt_payload(id_token) or {}
-        ctx: UserContext = claims_to_user_context(claims)
-
-        sessao[_SESSION_ID_TOKEN] = id_token
-        sessao[_SESSION_USER] = {
-            "user_id": ctx.user_id,
-            "department": ctx.department,
-            "cost_center": ctx.cost_center,
-        }
-
-        destino = sessao.pop(_SESSION_NEXT, "/") or "/"
-        return RedirectResponse(destino if destino.startswith("/") else "/", status_code=302)
-
-    async def _logout(self, request: "Request") -> "Response":
-        try:
-            request.session.pop(_SESSION_ID_TOKEN, None)
-            request.session.pop(_SESSION_USER, None)
-        except Exception:
-            pass
-
-        # Logout no Cognito (encerra a sessão do Hosted UI também), voltando para
-        # a URL configurada. Sem logout_redirect_uri, só limpa a sessão local.
-        if self._cfg.logout_redirect_uri:
-            params = {
-                "client_id": self._cfg.client_id,
-                "logout_uri": self._cfg.logout_redirect_uri,
-            }
-            url = f"{self._cfg.domain}/logout?" + urllib.parse.urlencode(params)
-            return RedirectResponse(url, status_code=302)
-        return RedirectResponse("/", status_code=302)
-
-    # ─── URLs públicas (para quem não usa as rotas prontas) ───────────────────
+    def create_state(self) -> str:
+        """`state` opaco para proteção CSRF no callback."""
+        return _b64url_no_pad(secrets.token_bytes(24))
 
     def authorize_url(self, *, state: str, code_challenge: str) -> str:
-        """Monta a URL de autorização do Hosted UI. Exposto para apps que querem
-        conduzir o fluxo por conta própria em vez de usar `install()`."""
+        """URL de autorização do Hosted UI. Com `identity_provider` conhecido, o
+        usuário cai direto no SSO e pula a tela de usuário/senha."""
         params = {
             "response_type": "code",
             "client_id": self._cfg.client_id,
@@ -331,15 +263,27 @@ class CognitoLogin:
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
-        return f"{self._cfg.domain}/oauth2/authorize?" + urllib.parse.urlencode(params)
+        if self._cfg.identity_provider:
+            params["identity_provider"] = self._cfg.identity_provider
+        return f"{self._domain}/oauth2/authorize?{urlencode(params)}"
 
-    # ─── Internos ─────────────────────────────────────────────────────────────
+    def logout_url(self) -> Optional[str]:
+        """URL de logout do Cognito, ou `None` sem `logout_redirect_uri`.
 
-    def _exchange_code(self, code: str, code_verifier: str) -> Optional[dict]:
-        """Troca o authorization code por tokens no endpoint /oauth2/token.
-        Server-to-server sobre TLS; o client_secret (se houver) vai no Basic auth.
-        Retorna o dict de tokens ou None em qualquer falha (sem vazar detalhe)."""
-        data = urllib.parse.urlencode(
+        Sem ela não há logout no Cognito: limpar a sessão local deixa a do
+        Cognito viva, e o próximo `/auth/login` reautentica sem pedir nada — o
+        usuário jura que deslogou. As rotas avisam pelo logger nesse caso.
+        """
+        if not self._cfg.logout_redirect_uri:
+            return None
+        params = {"client_id": self._cfg.client_id, "logout_uri": self._cfg.logout_redirect_uri}
+        return f"{self._domain}/logout?{urlencode(params)}"
+
+    def exchange_code(self, code: str, code_verifier: str) -> Dict[str, Any]:
+        """Troca o code por tokens em `/oauth2/token`. Devolve
+        `{"ok": True, "tokens": {...}}` ou `{"ok": False, "reason": "..."}` — e
+        reporta o motivo, porque um 401 engolido parece falha de rede."""
+        corpo = urlencode(
             {
                 "grant_type": "authorization_code",
                 "client_id": self._cfg.client_id,
@@ -347,46 +291,230 @@ class CognitoLogin:
                 "redirect_uri": self._cfg.redirect_uri,
                 "code_verifier": code_verifier,
             }
-        ).encode("ascii")
-
+        ).encode("utf-8")
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         if self._cfg.client_secret:
-            basic = base64.b64encode(
-                f"{self._cfg.client_id}:{self._cfg.client_secret}".encode("utf-8")
-            ).decode("ascii")
-            headers["Authorization"] = f"Basic {basic}"
+            par = f"{self._cfg.client_id}:{self._cfg.client_secret}".encode("utf-8")
+            headers["Authorization"] = "Basic " + base64.b64encode(par).decode("ascii")
 
-        req = urllib.request.Request(
-            f"{self._cfg.domain}/oauth2/token", data=data, headers=headers, method="POST"
+        req = Request(  # noqa: S310 — URL vem da config do dono
+            f"{self._domain}/oauth2/token", data=corpo, headers=headers, method="POST"
         )
         try:
-            with urllib.request.urlopen(req, timeout=_TOKEN_TIMEOUT_S) as resp:
-                corpo = resp.read().decode("utf-8", "replace")
-            parsed = json.loads(corpo)
-            return parsed if isinstance(parsed, dict) else None
-        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
-            return None
-        except Exception:
-            return None
+            with self._urlopen(req, timeout=_TOKEN_TIMEOUT_S) as resp:
+                bruto = resp.read().decode("utf-8")
+            dados = json.loads(bruto)
+            if not isinstance(dados, dict):
+                motivo = "token endpoint devolveu payload que não é objeto"
+                self._reportar(motivo)
+                return {"ok": False, "reason": motivo}
+            return {"ok": True, "tokens": dados}
+        except Exception as erro:  # noqa: BLE001 — o motivo real vai pro logger
+            # O corpo do erro traz `error`/`error_description` do Cognito, que é
+            # o que distingue secret errado de redirect_uri divergente. O secret
+            # nunca está aí — ele viaja no header.
+            detalhe = getattr(erro, "read", None)
+            corpo_erro = ""
+            if callable(detalhe):
+                try:
+                    corpo_erro = detalhe().decode("utf-8")[:300]
+                except Exception:  # noqa: BLE001
+                    corpo_erro = ""
+            motivo = str(erro)
+            self._reportar("falha na troca de token", {"erro": motivo, "detalhe": corpo_erro})
+            return {"ok": False, "reason": motivo}
 
-    @staticmethod
-    def _session_or_error(request: "Request") -> Optional[dict]:
-        try:
-            _ = request.session
-            return request.session
-        except Exception:
-            return None
-
-    @staticmethod
-    def _session_missing_response() -> "Response":
-        return JSONResponse(
-            {
-                "error": "session_unavailable",
-                "detail": "SessionMiddleware não montado — o login precisa da sessão para "
-                "guardar state/PKCE e o id_token.",
-            },
-            status_code=500,
+    def user_context_from_id_token(self, id_token: Optional[str]) -> UserContext:
+        """Decodifica o `id_token` (sem conferir assinatura — ver a nota de
+        segurança no topo) e mapeia os claims. `iss`, `aud` e `exp` SÃO
+        conferidos: token expirado numa sessão longa atribuiria spans a quem saiu
+        horas atrás. Nunca lança — token inválido devolve contexto vazio, que o
+        span registra como anônimo em vez de usuário fabricado."""
+        if not _nao_vazio(id_token):
+            return UserContext()
+        claims = _decodificar_payload_jwt(id_token or "")
+        if claims is None:
+            self._reportar("id_token não pôde ser decodificado")
+            return UserContext()
+        problema = self._conferir_claims(claims)
+        if problema is not None:
+            self._reportar(f"id_token recusado: {problema}")
+            return UserContext()
+        ctx = claims_to_user_context(claims)
+        return UserContext(
+            user_id=ctx.user_id,
+            department=ctx.department,
+            cost_center=ctx.cost_center,
+            token=id_token,
         )
 
+    def handle_callback(self, *, code: str, code_verifier: str) -> Dict[str, Any]:
+        """Trata o callback de forma neutra de framework — o chamador já conferiu
+        o `state`."""
+        trocado = self.exchange_code(code, code_verifier)
+        if not trocado["ok"]:
+            return {"ok": False, "reason": trocado["reason"]}
+        id_token = trocado["tokens"].get("id_token")
+        if not _nao_vazio(id_token):
+            motivo = "resposta de token sem id_token"
+            self._reportar(motivo)
+            return {"ok": False, "reason": motivo}
+        return {
+            "ok": True,
+            "id_token": id_token,
+            "user": self.user_context_from_id_token(id_token),
+            "tokens": trocado["tokens"],
+        }
 
-__all__ = ["CognitoLogin", "CognitoLoginConfig"]
+    # ─── Resolvers para o PumpIdentityMiddleware ─────────────────────────────
+
+    def id_token_resolver(self, request: Any) -> Optional[str]:
+        """Lê o `id_token` guardado na sessão. Assinatura esperada pelo
+        `PumpIdentityMiddleware`."""
+        sessao = _sessao(request)
+        if sessao is None:
+            return None
+        valor = sessao.get(_SESSION_ID_TOKEN)
+        return valor if _nao_vazio(valor) else None
+
+    def user_resolver(self, request: Any) -> Optional[Dict[str, Any]]:
+        """Resolve o usuário logado a partir da sessão, para o
+        `PumpIdentityMiddleware` atribuir os spans da requisição."""
+        ctx = self.user_context_from_id_token(self.id_token_resolver(request))
+        if not ctx.user_id:
+            return None
+        dados: Dict[str, Any] = {"email": ctx.user_id}
+        if ctx.department:
+            dados["department"] = ctx.department
+        if ctx.cost_center:
+            dados["cost_center"] = ctx.cost_center
+        return dados
+
+    # ─── Rotas prontas (Starlette/FastAPI) ───────────────────────────────────
+
+    def install(self, app: Any, *, prefix: str = "/auth") -> None:
+        """Monta `/auth/login`, `/auth/callback` e `/auth/logout` no app.
+
+        Requer `SessionMiddleware` — é a sessão que guarda `state`, o verifier do
+        PKCE e o `id_token`. O import do Starlette é local: o SDK não exige
+        framework web, e quem não usa este módulo não paga por ele.
+        """
+        try:
+            from starlette.responses import RedirectResponse
+        except ImportError as erro:  # pragma: no cover - depende do ambiente
+            raise ImportError(
+                "[pump-evolution] CognitoLogin.install requer starlette/fastapi instalado. "
+                "Use as primitivas (create_pkce/authorize_url/handle_callback) com o seu "
+                "framework, se preferir não instalar."
+            ) from erro
+
+        def login(request: Any) -> Any:
+            sessao = _sessao(request)
+            if sessao is None:
+                return self._sem_sessao(RedirectResponse)
+            pkce = self.create_pkce()
+            estado = self.create_state()
+            sessao[_SESSION_STATE] = estado
+            sessao[_SESSION_VERIFIER] = pkce["verifier"]
+            sessao[_SESSION_NEXT] = safe_next_path(request.query_params.get("next"))
+            return RedirectResponse(
+                self.authorize_url(state=estado, code_challenge=pkce["challenge"]), status_code=302
+            )
+
+        def callback(request: Any) -> Any:
+            sessao = _sessao(request)
+            if sessao is None:
+                return self._sem_sessao(RedirectResponse)
+
+            esperado = sessao.pop(_SESSION_STATE, None)
+            verifier = sessao.pop(_SESSION_VERIFIER, None)
+            destino = safe_next_path(sessao.pop(_SESSION_NEXT, "/"))
+
+            erro = request.query_params.get("error")
+            if erro:
+                return self._falhou(RedirectResponse, destino, f"authorize devolveu error={erro}")
+            code = request.query_params.get("code")
+            estado = request.query_params.get("state")
+            if not code or not estado or not esperado or not verifier:
+                return self._falhou(RedirectResponse, destino, "callback sem code/state ou sessão")
+            if not secrets.compare_digest(str(estado), str(esperado)):
+                return self._falhou(RedirectResponse, destino, "state divergente (possível CSRF)")
+
+            resultado = self.handle_callback(code=code, code_verifier=verifier)
+            if not resultado["ok"]:
+                return self._falhou(RedirectResponse, destino, resultado["reason"])
+            sessao[_SESSION_ID_TOKEN] = resultado["id_token"]
+            return RedirectResponse(destino, status_code=302)
+
+        def logout(request: Any) -> Any:
+            sessao = _sessao(request)
+            if sessao is not None:
+                for chave in (_SESSION_ID_TOKEN, _SESSION_STATE, _SESSION_VERIFIER, _SESSION_NEXT):
+                    sessao.pop(chave, None)
+            url = self.logout_url()
+            if url is None:
+                self._reportar(
+                    "logout limpou só a sessão local: sem logout_redirect_uri a sessão do "
+                    "Cognito continua viva e o próximo login não vai pedir nada"
+                )
+                return RedirectResponse("/", status_code=302)
+            return RedirectResponse(url, status_code=302)
+
+        app.add_route(f"{prefix}/login", login, methods=["GET"])
+        app.add_route(f"{prefix}/callback", callback, methods=["GET"])
+        app.add_route(f"{prefix}/logout", logout, methods=["GET"])
+
+    # ─── Interno ─────────────────────────────────────────────────────────────
+
+    def _conferir_claims(self, claims: Dict[str, Any]) -> Optional[str]:
+        """Confere o que dá sem a assinatura. Devolve o problema, ou `None`."""
+        if self._cfg.issuer is not None and claims.get("iss") != self._cfg.issuer:
+            return "iss não bate com o issuer configurado"
+        aud = claims.get("aud")
+        if aud is not None:
+            bate = (
+                aud == self._cfg.client_id
+                if isinstance(aud, str)
+                else isinstance(aud, Sequence) and self._cfg.client_id in aud
+            )
+            if not bate:
+                return "aud não bate com o App Client"
+        exp = claims.get("exp")
+        if isinstance(exp, (int, float)) and exp <= self._now():
+            return "expirado"
+        return None
+
+    def _reportar(self, mensagem: str, meta: Optional[Dict[str, Any]] = None) -> None:
+        """Reporta problema de login. Silencioso só quando não há logger."""
+        try:
+            avisar = getattr(self._cfg.logger, "warn", None)
+            if callable(avisar):
+                avisar(f"[pump-evolution] CognitoLogin: {mensagem}", meta)
+        except Exception:  # noqa: BLE001 — logger quebrado não quebra o login
+            pass
+
+    def _falhou(self, redirect: Any, destino: str, motivo: str) -> Any:
+        self._reportar(f"login falhou: {motivo}")
+        return redirect(destino, status_code=302)
+
+    def _sem_sessao(self, redirect: Any) -> Any:
+        self._reportar("sem sessão na request: SessionMiddleware é obrigatório")
+        return redirect("/", status_code=302)
+
+
+def _sessao(request: Any) -> Optional[Dict[str, Any]]:
+    sessao = getattr(request, "session", None)
+    return sessao if isinstance(sessao, dict) else None
+
+
+def _decodificar_payload_jwt(token: str) -> Optional[Dict[str, Any]]:
+    partes = token.split(".")
+    if len(partes) != 3 or not partes[1]:
+        return None
+    try:
+        segmento = partes[1]
+        segmento += "=" * (-len(segmento) % 4)
+        dados = json.loads(base64.urlsafe_b64decode(segmento).decode("utf-8"))
+        return dados if isinstance(dados, dict) else None
+    except Exception:  # noqa: BLE001
+        return None

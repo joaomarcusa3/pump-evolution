@@ -94,6 +94,12 @@ from .mcp_instrumentation import (
 )
 from .chat_recorder import OPERACAO_CHAT, record_chat
 from .core import PumpEvolution, PumpInitInternals, init
+from .managed_agent_client import (
+    ManagedAgentClient,
+    ManagedAgentInvokeError,
+    ManagedAgentResult,
+    build_agent_invoke_scope,
+)
 from .types import (
     AgentManifest,
     ComplianceFinding,
@@ -101,6 +107,9 @@ from .types import (
     DataClassification,
     ItemKind,
     ManifestOwner,
+    ManifestCognito,
+    ManifestManagedRuntime,
+    ManifestModel,
     ManifestRuntime,
     ManifestTelemetry,
     McpToolInvocation,
@@ -116,7 +125,7 @@ from .types import (
     UserContext,
 )
 
-__version__ = "0.0.3"
+__version__ = "0.0.8"
 
 __all__ = [
     "record_chat",
@@ -193,13 +202,21 @@ __all__ = [
     "CircuitBreaker",
     "with_retry",
     "backoff_delay_ms",
+    # managed runtime (hospedagem opcional do agente externo, ADR-0068)
+    "ManagedAgentClient",
+    "ManagedAgentInvokeError",
+    "ManagedAgentResult",
+    "build_agent_invoke_scope",
     # types
     "AgentManifest",
     "PumpConfig",
     "PumpHandle",
     "ServiceAccountCredentials",
     "ManifestOwner",
+    "ManifestCognito",
     "ManifestRuntime",
+    "ManifestManagedRuntime",
+    "ManifestModel",
     "ManifestTelemetry",
     "ResourceAttributes",
     "UserContext",

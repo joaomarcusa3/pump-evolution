@@ -2,41 +2,28 @@
 
 ## Arquitetura de Autenticação
 
-O SDK separa duas identidades independentes — e **ambas vivem na
-plataforma**:
+O SDK separa duas identidades completamente independentes:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  AGENTE                                                       │
+│  AGENTE (qualquer Cognito / SSO / IdP)                       │
 │                                                               │
-│  Login do usuário → Cognito de USUÁRIO na conta de TOOLING    │
-│       (authorization_code + PKCE; App Client por agente,      │
-│        provisionado no install via Factory API)               │
-│       ↓ id_token com custom:department, custom:cost_center    │
-│  CognitoLogin (SDK) guarda o id_token na sessão               │
+│  Auth Middleware do agente → resolve quem é o usuário         │
 │       ↓                                                       │
-│  PumpIdentityMiddleware → lê o id_token, decodifica claims    │
-│       ↓                                                       │
+│  PumpIdentityMiddleware → lê id_token guardado pelo agente   │
+│       ↓ decodifica claims: custom:department, email           │
 │  SDK pump-evolution → seta enduser.id + department no span    │
 │       ↓                                                       │
-│  Service Account (M2M) → autentica no Cognito CTA             │
+│  Service Account (M2M) → autentica no Cognito CTA            │
 │       ↓                                                       │
 │  Envia span → CTA receiver                                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Por que o login do usuário é da plataforma.** Os claims de
-custo (`custom:department`, `custom:cost_center`) só são confiáveis se a plataforma
-controlar o pool que os emite. Deixá-los a cargo do Cognito de cada cliente
-significava, na prática, span sem departamento e custo não atribuído. Então o
-**User Pool de usuário final vive na conta de tooling**, com um App Client por
-agente, e o agente troca o login dele para esse pool — crie do zero se não tinha,
-crie na tooling e use o novo se tinha.
+**O Cognito do agente e o Cognito do CTA NUNCA se cruzam.**
 
-- **Cognito de usuário (tooling)** → autentica a PESSOA; carrega os claims de custo
-- **Service Account (Cognito CTA, M2M)** → autentica o SDK pra ENVIAR spans
-
-As duas credenciais são distintas e não se cruzam entre si.
+- Service Account (CTA Cognito) → autentica o SDK pra ENVIAR spans
+- id_token (Cognito do agente) → SDK LÊ pra ATRIBUIR spans ao usuário
 
 ## Passo a passo
 
@@ -77,15 +64,6 @@ PUMP_OTEL_ENDPOINT=<otelEndpoint — pegue na aba SDK & Telemetria do componente
 PUMP_SERVICE_ACCOUNT_CLIENT_ID=<client_id>
 PUMP_SERVICE_ACCOUNT_CLIENT_SECRET=<secret do portal - NUNCA no git>
 PUMP_SERVICE_ACCOUNT_TOKEN_URL=<tokenUrl — pegue na aba SDK & Telemetria do componente>
-
-# ─── Login do usuário: Cognito de usuário na conta de tooling ───
-# Provisionado no install via Factory API (App Client por agente). Sem inventar:
-# estes valores saem do provisionamento, não de outro projeto.
-COGNITO_DOMAIN=<https://<prefixo>.auth.<region>.amazoncognito.com>
-COGNITO_CLIENT_ID=<app client do agente no pool da tooling>
-COGNITO_REDIRECT_URI=<https://<seu-app>/auth/callback — registrado no App Client>
-COGNITO_CLIENT_SECRET=<secret do App Client, se confidencial — NUNCA no git>
-COGNITO_LOGOUT_REDIRECT_URI=<https://<seu-app>/ — opcional>
 ```
 
 ### 4. Inserir no entrypoint (main.py)
@@ -118,50 +96,49 @@ if _env_pump_path.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 ```
 
-#### 4.2 Login do usuário (Cognito da tooling) + middleware de identidade
+#### 4.2 Middleware de identidade (após o auth do seu app)
 
-O login dos usuários passa a usar o **Cognito de usuário provisionado na conta de
-tooling**. O SDK monta as rotas de login e entrega os resolvedores que
-o middleware consome — uma chamada, sem copiar código:
+A partir da 0.0.2 isto é um módulo do pacote. Não copie código:
 
 ```python
-from pump_evolution.integrations.cognito import CognitoLogin
 from pump_evolution.integrations.fastapi import PumpIdentityMiddleware
 
-login = CognitoLogin.from_env()   # lê COGNITO_* do .env.pump
+app.add_middleware(PumpIdentityMiddleware)
+```
 
-# Monta /auth/login, /auth/callback e /auth/logout.
-# Requer SessionMiddleware montado (guarda state/PKCE e o id_token):
-#   from starlette.middleware.sessions import SessionMiddleware
-#   app.add_middleware(SessionMiddleware, secret_key=os.environ["SESSION_SECRET"])
-login.install(app)
+Assim ele lê `request.state.user` — a convenção mais comum em FastAPI — e
+propaga o usuário para todo span emitido durante a requisição.
 
-# O middleware lê o usuário/​id_token da sessão preenchida pelo login e propaga
-# a identidade (enduser.id + department + cost_center) para todo span da request:
+**Se o seu app guarda o usuário em outro lugar**, passe um resolvedor:
+
+```python
 app.add_middleware(
     PumpIdentityMiddleware,
-    user_resolver=login.user_resolver,
-    id_token_resolver=login.id_token_resolver,
+    user_resolver=lambda request: request.scope.get("usuario_logado"),
 )
 ```
 
-Fluxo: o usuário acessa `/auth/login` → Hosted UI do Cognito da tooling →
-`/auth/callback` troca o código por tokens (PKCE + state) e guarda o `id_token`
-na sessão → o middleware decodifica os claims e atribui cada span.
+**Para ter `department` e `cost_center`**, o SDK precisa do `id_token` que o
+seu app já guardou no login. Onde ele está varia por projeto — banco, cookie,
+sessão, cabeçalho —, então entra por callback:
 
-**Já tem um login próprio e não quer usar as rotas prontas?** Use as primitivas
-(`login.authorize_url(...)`, `login.exchange_code(...)`) e continue passando
-`user_resolver`/`id_token_resolver` apontando para onde você guardou o `id_token`.
-Mas o login **precisa** ser contra o pool da tooling — é ele que carrega os claims
-de custo governados; o pool antigo do agente não serve para atribuição de custo.
+```python
+async def buscar_id_token(request, email):
+    # troque pelo seu caso: consulta ao banco, request.cookies.get("id_token"),
+    # request.headers.get("Authorization"), sessão...
+    return await meu_repositorio.token_de(email)
+
+app.add_middleware(PumpIdentityMiddleware, id_token_resolver=buscar_id_token)
+```
 
 Por que isso importa: o grupo de acesso interno do app (`Administrador`,
 `Operador`) **não** é o departamento da pessoa. O departamento real vem dos
-claims `custom:department` / `custom:topaz_directorate`, emitidos pelo pool da
-tooling, e é ele que sustenta o custo por centro de custo no portal.
+claims `custom:department` / `custom:topaz_directorate` do Cognito, e é ele que
+sustenta o custo por centro de custo no portal. Sem o `id_token`, o span sai
+com o usuário certo e sem departamento.
 
-O SDK **não valida** a assinatura do JWT ao ler os claims — a validação
-aconteceu no login (troca de código sobre TLS). Só decodifica o payload.
+O SDK **não valida** o JWT — ele confia no seu middleware de autenticação, que
+já resolveu quem é a pessoa. Só decodifica o payload para ler os claims.
 
 
 #### 4.3 Init no startup
@@ -292,7 +269,6 @@ E no `requirements.txt`:
 
 1. **O SDK é no-op se `PUMP_EVOLUTION_ENABLED` != `true`** — sem risco de quebrar o agente
 2. **Falha de telemetria NUNCA derruba o processo** — degrada em silêncio
-3. **O login do usuário usa o Cognito da tooling** — App Client por agente,
-   provisionado no install; é ele que carrega os claims de custo governados
-4. **Identidade vem do id_token do pool da tooling** — decodifica claims, não valida assinatura
+3. **Não precisa mudar nenhum Cognito** — SDK usa service account M2M separado
+4. **Identidade vem do id_token que o agente já tem** — decodifica claims, não valida
 5. **Span DEVE ter `gen_ai.operation.name = "chat"`** — sem isso o CTA não aceita (`accepted: 0`)

@@ -1,3 +1,7 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Dependencies
 node_modules/
 
@@ -17,6 +21,9 @@ coverage/
 # Packaged tarballs
 *.tgz
 
+# Vendor zip montado por scripts/build_vendor_zip.py
+dist-zip/
+
 # Env (nunca commitar segredos)
 .env
 .env.local
@@ -26,3 +33,9 @@ coverage/
 
 # api-extractor scratch
 temp/
+
+# Artefatos de build do pacote Python (pip install -e / build)
+py/build/
+py/dist/
+*.egg-info/
+.pytest_cache/

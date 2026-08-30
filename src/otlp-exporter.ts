@@ -45,7 +45,7 @@ import type { TelemetryLogger } from "./types.js";
  * CloudFront WAF) blocks any request missing it — the batch would otherwise be
  * dropped silently at the edge, never reaching the receiver.
  */
-const SDK_USER_AGENT = "@topaz-ia/pump-evolution/0.0.1";
+const SDK_USER_AGENT = "@topaz-ia/pump-evolution/0.0.8";
 
 // ─── Logging hook (SDK never uses console) ─────────────────────────────────────
 

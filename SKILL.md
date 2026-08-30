@@ -37,6 +37,9 @@ Adiciona observabilidade governada a um agente ou MCP **sem alterar a resposta**
    ```
 3. **Agente:** `const bedrock = pump.instrumentBedrock(client)`.
    **MCP:** `const server = pump.instrumentMcpServer(mcpServer)` (antes de registrar tools).
+   Cobre as duas classes do `@modelcontextprotocol/sdk`: `McpServer` (embrulha
+   `registerTool`/`tool`) e `Server` (embrulha o handler de `tools/call` registrado por
+   `setRequestHandler`). Servidor sem nenhuma dessas superfícies → **lança**, nunca no-op.
 4. Por request, autenticar + propagar identidade numa chamada:
    ```ts
    const r = await auth.runWithIdentity(req.headers.authorization, () => /* invoca */);

@@ -18,7 +18,7 @@ Notas de mapeamento TS→Python:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Protocol, TypeVar
+from typing import Any, Dict, List, Literal, Optional, Protocol, Sequence, TypeVar
 
 # ─── Manifest (subset of the real AgentSpecProps) ────────────────────────────
 
@@ -58,12 +58,83 @@ class ManifestTelemetry:
 
 
 @dataclass(frozen=True)
+class ManifestCognito:
+    """Bloco de login de usuário final que a plataforma grava no manifesto ao
+    provisionar o App Client (`cta_factory_provisionar_cognito`).
+
+    É o login das PESSOAS que usam o componente — identidade distinta do
+    `ManifestTelemetry`, que autentica o processo. As duas nunca se cruzam:
+    telemetria é `client_credentials`, esta é `authorization_code` + PKCE.
+
+    Git-safe por construção: a plataforma nunca escreve o secret aqui. Um client
+    confidencial guarda o secret no cofre show-once do portal, e ele chega ao app
+    pelo ambiente.
+    """
+
+    domain: str
+    issuer: str
+    client_id: str
+    redirect_uri: str
+    scopes: str
+    identity_providers: Optional[Sequence[str]] = None
+    #: Só sai quando o pool tem EXATAMENTE UM federado — com dois ou mais,
+    #: adivinhar mandaria o usuário para o SSO errado. A ausência é informação.
+    identity_provider: Optional[str] = None
+    logout_redirect_uri: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ManifestRuntime:
     """Bloco external runtime (subconjunto do `ExternalRuntime` real). Só as
-    partes que o SDK precisa para resolver os defaults de telemetria."""
+    partes que o SDK precisa: defaults de telemetria, login de usuário, runtime
+    gerenciado e catálogo de modelos."""
 
     external: Optional[bool] = None
     telemetry: Optional[ManifestTelemetry] = None
+    cognito: Optional["ManifestCognito"] = None
+    #: Defaults de runtime gerenciado — fonte para `ManagedAgentClient.from_manifest`.
+    managed: Optional["ManifestManagedRuntime"] = None
+    #: Snapshot (escrito pelo portal) do catálogo Bedrock habilitado na conta.
+    models: Optional[List["ManifestModel"]] = None
+
+
+@dataclass(frozen=True)
+class ManifestManagedRuntime:
+    """Config de runtime gerenciado declarada no manifesto.
+
+    Valores NÃO-SECRETOS que o portal/MCP produz quando um agente externo opta
+    pela hospedagem no runtime AgentCore gerenciado da plataforma, gravados no
+    manifesto para o SDK montar o `ManagedAgentClient` direto do manifesto —
+    `ManagedAgentClient.from_manifest(manifest)` — em vez do dev copiar as
+    variáveis `PUMP_MANAGED_*` à mão.
+
+    SEGURANÇA: a credencial de invoke (`client_id` + `client_secret`) NUNCA é
+    armazenada aqui — é provisionada show-once e vive no ambiente/secrets
+    manager, mesclada em runtime. Só a fiação estável e git-safe fica no
+    manifesto."""
+
+    endpoint: str  # YAML: endpoint — invoke completo (<cta>/api/agents/<agentId>/invoke)
+    agent_id: str  # YAML: agentId — id do agente no registro do CTA
+    token_url: str  # YAML: tokenUrl — endpoint OAuth do Cognito da plataforma
+    scope: Optional[str] = None  # YAML: scope — default cta-consumers/invoke:agent:<agentId>
+
+
+@dataclass(frozen=True)
+class ManifestModel:
+    """Um modelo disponível para o agente, como snapshot que o portal/MCP grava
+    no manifesto a partir do catálogo Bedrock ao vivo (`/api/discovery/models`)
+    no install/update. Espelha a forma do catálogo (`modelId`, `name`,
+    `provider`, `streaming`).
+
+    IMPORTANTE: isso é um snapshot **escrito pelo portal** do que a conta/região
+    tem habilitado — NÃO é uma lista estática mantida à mão. A checagem
+    autoritativa de disponibilidade continua atrás da API da plataforma / runtime
+    gerenciado; a lista do manifesto é o que o SDK expõe ao desenvolvedor."""
+
+    model_id: str  # YAML: modelId — inference-profile model id
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    streaming: Optional[bool] = None
 
 
 @dataclass(frozen=True)

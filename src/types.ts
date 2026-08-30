@@ -56,12 +56,110 @@ export interface ManifestTelemetry {
 }
 
 /**
+ * End-user login block the platform writes into the manifest when the App Client
+ * is provisioned (`cta_factory_provisionar_cognito`). It is the **login of the
+ * people who use the component** — a different identity from
+ * {@link ManifestTelemetry}, which authenticates the process itself. The two
+ * never cross: telemetry is `client_credentials`, this one is
+ * `authorization_code` + PKCE.
+ *
+ * Git-safe by construction: the platform never writes the client secret here.
+ * A confidential client keeps its secret in the portal's show-once vault, and it
+ * reaches the app through the environment.
+ */
+export interface ManifestCognito {
+  /** Hosted UI domain, e.g. `https://<prefix>.auth.<region>.amazoncognito.com`. */
+  readonly domain: string;
+  /**
+   * Token issuer (`https://cognito-idp.<region>.amazonaws.com/<poolId>`). Needed
+   * to validate the caller's JWT and to build the OAuth discovery document.
+   */
+  readonly issuer: string;
+  /** App Client provisioned for this component. */
+  readonly clientId: string;
+  /** Absolute callback URL, registered in the App Client. */
+  readonly redirectUri: string;
+  /** Space-separated OAuth scopes. */
+  readonly scopes: string;
+  /** Federated identity providers enabled on the pool. */
+  readonly identityProviders?: readonly string[];
+  /**
+   * Provider to hand to `/oauth2/authorize` so the user lands straight on the
+   * SSO, skipping the username/password screen.
+   *
+   * The platform only emits this when the pool has EXACTLY ONE federated
+   * provider — with two or more, guessing would send people to the wrong SSO.
+   * So its absence is meaningful, not an omission: fall back to the Hosted UI
+   * picker instead of inventing a value.
+   */
+  readonly identityProvider?: string;
+  /** Where Cognito sends the user after logout. */
+  readonly logoutRedirectUri?: string;
+}
+
+/**
  * External runtime block (subset of the real `ExternalRuntime`). Only the parts
- * the SDK needs to resolve telemetry defaults are modelled here.
+ * the SDK needs to resolve telemetry defaults and the end-user login are
+ * modelled here.
  */
 export interface ManifestRuntime {
   readonly external?: boolean;
   readonly telemetry?: ManifestTelemetry;
+  readonly cognito?: ManifestCognito;
+  /** Managed-runtime defaults — source for `ManagedAgentClient.fromManifest`. */
+  readonly managed?: ManifestManagedRuntime;
+  /**
+   * Available models (portal-written snapshot of the account's enabled Bedrock
+   * catalog). The SDK surfaces this list to the developer; it is not a
+   * hand-maintained static list.
+   */
+  readonly models?: readonly ManifestModel[];
+}
+
+/**
+ * Managed-runtime configuration declared in the manifest.
+ *
+ * These are the **non-secret** values the portal/MCP produces when an external
+ * agent opts into the platform's managed AgentCore runtime, and writes into the
+ * manifest so the SDK can wire `ManagedAgentClient` straight from the manifest —
+ * `ManagedAgentClient.fromManifest(manifest)` — instead of the developer copying
+ * the `PUMP_MANAGED_*` env vars by hand.
+ *
+ * SECURITY: the invoke credential (`clientId` + `clientSecret`) is NEVER stored
+ * here — it is provisioned show-once and lives in the environment / secrets
+ * manager, merged at runtime. Only stable, git-safe wiring lives in the manifest.
+ */
+export interface ManifestManagedRuntime {
+  /** Full invoke endpoint (`<cta>/api/agents/<agentId>/invoke`). */
+  readonly endpoint: string;
+  /** Agent id in the CTA registry (used to derive the invoke scope). */
+  readonly agentId: string;
+  /** OAuth token endpoint (`.../oauth2/token`) of the platform Cognito. */
+  readonly tokenUrl: string;
+  /** Invoke scope. Optional — SDK derives `cta-consumers/invoke:agent:<agentId>`. */
+  readonly scope?: string;
+}
+
+/**
+ * A model available to the agent, as a snapshot the portal/MCP writes into the
+ * manifest from the live Bedrock catalog (`/api/discovery/models`) at install /
+ * update time. Mirrors the catalog shape (`modelId`, `name`, `provider`,
+ * `streaming`).
+ *
+ * IMPORTANT: this is a portal-written **snapshot** of what the account/region has
+ * enabled — NOT a hand-maintained static list. The authoritative availability
+ * check still lives behind the platform API / managed runtime; the manifest list
+ * is what the SDK surfaces to the developer.
+ */
+export interface ManifestModel {
+  /** Inference-profile model id (e.g. `us.anthropic.claude-sonnet-4-6`). */
+  readonly modelId: string;
+  /** Human-readable model name. */
+  readonly name?: string;
+  /** Provider label (e.g. `Anthropic`, `Amazon`). */
+  readonly provider?: string;
+  /** Whether the model supports streaming. */
+  readonly streaming?: boolean;
 }
 
 /**
@@ -100,23 +198,6 @@ export interface AgentManifest {
   readonly runtime?: ManifestRuntime;
 }
 
-// ─── Diagnostics ──────────────────────────────────────────────────────────────
-
-/**
- * Minimal, injectable diagnostic logger. By default the SDK degrades **silently**
- * (the steering forbids `console.*`), which means export failures — an invalid
- * or expired service-account credential (401), a missing scope (403), a network
- * error or a 5xx — are lost with no trace. Provide a `logger` in {@link PumpConfig}
- * to surface those instead of losing them.
- *
- * PRIVACY: the SDK only ever passes rule labels, endpoints, HTTP status and short
- * error messages here — never secrets, tokens, prompts or PII.
- */
-export interface TelemetryLogger {
-  warn?(message: string, meta?: Record<string, unknown>): void;
-  debug?(message: string, meta?: Record<string, unknown>): void;
-}
-
 // ─── SDK init configuration ──────────────────────────────────────────────────
 
 /**
@@ -141,6 +222,21 @@ export interface ServiceAccountCredentials {
 /**
  * Initialization configuration for `PumpEvolution.init`.
  */
+/**
+ * Minimal, injectable diagnostic logger. By default the SDK degrades **silently**
+ * (the steering forbids `console.*`), which means export failures — an invalid
+ * or expired service-account credential (401), a missing scope (403), a network
+ * error or a 5xx — are lost with no trace. Provide a `logger` in {@link PumpConfig}
+ * to surface those instead of losing them.
+ *
+ * PRIVACY: the SDK only ever passes rule labels, endpoints, HTTP status and short
+ * error messages here — never secrets, tokens, prompts or PII.
+ */
+export interface TelemetryLogger {
+  warn?(message: string, meta?: Record<string, unknown>): void;
+  debug?(message: string, meta?: Record<string, unknown>): void;
+}
+
 export interface PumpConfig {
   /**
    * OTLP/HTTP endpoint of the CTA telemetry receiver. Optional — when omitted it
@@ -384,10 +480,16 @@ export interface PumpHandle {
   traceMcpTool<T>(invocation: McpToolInvocation, fn: () => T): T;
   /**
    * Auto-instruments an MCP server (`@modelcontextprotocol/sdk`) in place so
-   * every tool it registers is governed automatically — no per-handler
+   * every tool call it serves is governed automatically — no per-handler
    * `traceMcpTool` wrapping. Returns the same server. Call it right after
    * constructing the server and BEFORE registering tools. When the SDK is
    * disabled, returns the server untouched.
+   *
+   * Covers BOTH server classes the MCP SDK ships: `McpServer` (high level —
+   * `registerTool` / `tool` are wrapped) and `Server` (low level — the
+   * `tools/call` handler registered via `setRequestHandler` is wrapped). A
+   * server exposing neither surface THROWS: no span would ever be emitted, and
+   * failing silently there is what this API must never do.
    *
    * Typed structurally (`S`) to avoid a hard dependency on the MCP SDK types.
    */
