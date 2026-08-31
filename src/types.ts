@@ -109,6 +109,60 @@ export interface ManifestRuntime {
   readonly external?: boolean;
   readonly telemetry?: ManifestTelemetry;
   readonly cognito?: ManifestCognito;
+  /** Managed-runtime defaults — source for `ManagedAgentClient.fromManifest`. */
+  readonly managed?: ManifestManagedRuntime;
+  /**
+   * Available models (portal-written snapshot of the account's enabled Bedrock
+   * catalog). The SDK surfaces this list to the developer; it is not a
+   * hand-maintained static list.
+   */
+  readonly models?: readonly ManifestModel[];
+}
+
+/**
+ * Managed-runtime configuration declared in the manifest.
+ *
+ * These are the **non-secret** values the portal/MCP produces when an external
+ * agent opts into the platform's managed AgentCore runtime, and writes into the
+ * manifest so the SDK can wire `ManagedAgentClient` straight from the manifest —
+ * `ManagedAgentClient.fromManifest(manifest)` — instead of the developer copying
+ * the `PUMP_MANAGED_*` env vars by hand.
+ *
+ * SECURITY: the invoke credential (`clientId` + `clientSecret`) is NEVER stored
+ * here — it is provisioned show-once and lives in the environment / secrets
+ * manager, merged at runtime. Only stable, git-safe wiring lives in the manifest.
+ */
+export interface ManifestManagedRuntime {
+  /** Full invoke endpoint (`<cta>/api/agents/<agentId>/invoke`). */
+  readonly endpoint: string;
+  /** Agent id in the CTA registry (used to derive the invoke scope). */
+  readonly agentId: string;
+  /** OAuth token endpoint (`.../oauth2/token`) of the platform Cognito. */
+  readonly tokenUrl: string;
+  /** Invoke scope. Optional — SDK derives `cta-consumers/invoke:agent:<agentId>`. */
+  readonly scope?: string;
+}
+
+/**
+ * A model available to the agent, as a snapshot the portal/MCP writes into the
+ * manifest from the live Bedrock catalog (`/api/discovery/models`) at install /
+ * update time. Mirrors the catalog shape (`modelId`, `name`, `provider`,
+ * `streaming`).
+ *
+ * IMPORTANT: this is a portal-written **snapshot** of what the account/region has
+ * enabled — NOT a hand-maintained static list. The authoritative availability
+ * check still lives behind the platform API / managed runtime; the manifest list
+ * is what the SDK surfaces to the developer.
+ */
+export interface ManifestModel {
+  /** Inference-profile model id (e.g. `us.anthropic.claude-sonnet-4-6`). */
+  readonly modelId: string;
+  /** Human-readable model name. */
+  readonly name?: string;
+  /** Provider label (e.g. `Anthropic`, `Amazon`). */
+  readonly provider?: string;
+  /** Whether the model supports streaming. */
+  readonly streaming?: boolean;
 }
 
 /**

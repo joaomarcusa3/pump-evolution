@@ -78,6 +78,17 @@ export {
 export type { SecurityEvaluationInput } from './security-checker.js';
 export { ServiceAccountTokenProvider, DEFAULT_TELEMETRY_SCOPE } from './token-provider.js';
 export type { FetchLike, ServiceAccountTokenProviderDeps } from './token-provider.js';
+export {
+  buildAgentInvokeScope,
+  ManagedAgentClient,
+  ManagedAgentInvokeError,
+} from './managed-agent-client.js';
+export type {
+  ManagedAgentClientConfig,
+  ManagedAgentInvocation,
+  ManagedAgentResult,
+  ManagedAgentServiceAccount,
+} from './managed-agent-client.js';
 export { backoffDelayMs, CircuitBreaker, withRetry } from './resilience.js';
 export { CHAT_OPERATION, recordChat } from './chat-recorder.js';
 export type { RecordChatInput } from './chat-recorder.js';
@@ -100,6 +111,8 @@ export type {
   ManifestOwner,
   ManifestCognito,
   ManifestRuntime,
+  ManifestManagedRuntime,
+  ManifestModel,
   ManifestTelemetry,
   McpToolInvocation,
   PumpConfig,

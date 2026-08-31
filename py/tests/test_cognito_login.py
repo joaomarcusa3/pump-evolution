@@ -166,7 +166,6 @@ def test_aceita_manifesto_antigo_sem_issuer() -> None:
     assert login.issuer is None
     assert "response_type=code" in login.authorize_url(state="s", code_challenge="c")
 
-
 def test_from_manifest_sem_bloco_aponta_o_passo_que_falta() -> None:
     with pytest.raises(ValueError, match="provisionar_cognito"):
         CognitoLogin.from_manifest(manifesto(), env={})

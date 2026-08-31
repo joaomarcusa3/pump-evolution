@@ -89,11 +89,55 @@ class ManifestCognito:
 @dataclass(frozen=True)
 class ManifestRuntime:
     """Bloco external runtime (subconjunto do `ExternalRuntime` real). Só as
-    partes que o SDK precisa: defaults de telemetria e o login de usuário."""
+    partes que o SDK precisa: defaults de telemetria, login de usuário, runtime
+    gerenciado e catálogo de modelos."""
 
     external: Optional[bool] = None
     telemetry: Optional[ManifestTelemetry] = None
     cognito: Optional["ManifestCognito"] = None
+    #: Defaults de runtime gerenciado — fonte para `ManagedAgentClient.from_manifest`.
+    managed: Optional["ManifestManagedRuntime"] = None
+    #: Snapshot (escrito pelo portal) do catálogo Bedrock habilitado na conta.
+    models: Optional[List["ManifestModel"]] = None
+
+
+@dataclass(frozen=True)
+class ManifestManagedRuntime:
+    """Config de runtime gerenciado declarada no manifesto.
+
+    Valores NÃO-SECRETOS que o portal/MCP produz quando um agente externo opta
+    pela hospedagem no runtime AgentCore gerenciado da plataforma, gravados no
+    manifesto para o SDK montar o `ManagedAgentClient` direto do manifesto —
+    `ManagedAgentClient.from_manifest(manifest)` — em vez do dev copiar as
+    variáveis `PUMP_MANAGED_*` à mão.
+
+    SEGURANÇA: a credencial de invoke (`client_id` + `client_secret`) NUNCA é
+    armazenada aqui — é provisionada show-once e vive no ambiente/secrets
+    manager, mesclada em runtime. Só a fiação estável e git-safe fica no
+    manifesto."""
+
+    endpoint: str  # YAML: endpoint — invoke completo (<cta>/api/agents/<agentId>/invoke)
+    agent_id: str  # YAML: agentId — id do agente no registro do CTA
+    token_url: str  # YAML: tokenUrl — endpoint OAuth do Cognito da plataforma
+    scope: Optional[str] = None  # YAML: scope — default cta-consumers/invoke:agent:<agentId>
+
+
+@dataclass(frozen=True)
+class ManifestModel:
+    """Um modelo disponível para o agente, como snapshot que o portal/MCP grava
+    no manifesto a partir do catálogo Bedrock ao vivo (`/api/discovery/models`)
+    no install/update. Espelha a forma do catálogo (`modelId`, `name`,
+    `provider`, `streaming`).
+
+    IMPORTANTE: isso é um snapshot **escrito pelo portal** do que a conta/região
+    tem habilitado — NÃO é uma lista estática mantida à mão. A checagem
+    autoritativa de disponibilidade continua atrás da API da plataforma / runtime
+    gerenciado; a lista do manifesto é o que o SDK expõe ao desenvolvedor."""
+
+    model_id: str  # YAML: modelId — inference-profile model id
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    streaming: Optional[bool] = None
 
 
 @dataclass(frozen=True)

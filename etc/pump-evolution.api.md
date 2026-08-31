@@ -50,6 +50,9 @@ export interface BedrockInstrumentationDeps {
 }
 
 // @public
+export function buildAgentInvokeScope(agentId: string): string;
+
+// @public
 export function buildResource(attributes: ResourceAttributes): Resource;
 
 // @public
@@ -415,6 +418,80 @@ export function loadManifest(source: string | AgentManifest): AgentManifest;
 export function loadResourceAttributes(source: string | AgentManifest): ResourceAttributes;
 
 // @public
+export class ManagedAgentClient {
+    constructor(config: ManagedAgentClientConfig);
+    static forAgent(config: {
+        baseUrl: string;
+        agentId: string;
+        serviceAccount: ManagedAgentServiceAccount;
+        fetchImpl?: FetchLike;
+    }): ManagedAgentClient;
+    static fromEnv(env?: Record<string, string | undefined>): ManagedAgentClient;
+    static fromManifest(source: string | AgentManifest, options?: {
+        readonly clientId?: string;
+        readonly clientSecret?: string;
+        readonly fetchImpl?: FetchLike;
+        readonly env?: Record<string, string | undefined>;
+    }): ManagedAgentClient;
+    invoke(invocation: ManagedAgentInvocation): Promise<ManagedAgentResult>;
+}
+
+// @public
+export interface ManagedAgentClientConfig {
+    readonly agentId: string;
+    readonly endpoint: string;
+    readonly fetchImpl?: FetchLike;
+    readonly serviceAccount: ManagedAgentServiceAccount;
+}
+
+// @public
+export interface ManagedAgentInvocation {
+    readonly message: string;
+    readonly modelId?: string;
+    readonly sessionId?: string;
+    readonly userToken?: string;
+}
+
+// @public
+export class ManagedAgentInvokeError extends Error {
+    constructor(message: string, options?: {
+        status?: number;
+        body?: unknown;
+    });
+    // (undocumented)
+    readonly body: unknown;
+    // (undocumented)
+    readonly status: number | undefined;
+}
+
+// @public
+export interface ManagedAgentResult {
+    // (undocumented)
+    readonly correlationId?: string;
+    // (undocumented)
+    readonly costUsd?: number;
+    // (undocumented)
+    readonly inputTokens?: number;
+    // (undocumented)
+    readonly latencyMs?: number;
+    readonly modelId?: string;
+    // (undocumented)
+    readonly outputTokens?: number;
+    readonly raw: Record<string, unknown>;
+    readonly reply: string;
+    // (undocumented)
+    readonly sessionId?: string;
+}
+
+// @public
+export interface ManagedAgentServiceAccount {
+    readonly clientId: string;
+    readonly clientSecret: string;
+    readonly scope?: string;
+    readonly tokenUrl: string;
+}
+
+// @public
 export interface ManifestCognito {
     readonly clientId: string;
     readonly domain: string;
@@ -424,6 +501,22 @@ export interface ManifestCognito {
     readonly logoutRedirectUri?: string;
     readonly redirectUri: string;
     readonly scopes?: string;
+}
+
+// @public
+export interface ManifestManagedRuntime {
+    readonly agentId: string;
+    readonly endpoint: string;
+    readonly scope?: string;
+    readonly tokenUrl: string;
+}
+
+// @public
+export interface ManifestModel {
+    readonly modelId: string;
+    readonly name?: string;
+    readonly provider?: string;
+    readonly streaming?: boolean;
 }
 
 // @public
@@ -442,6 +535,8 @@ export interface ManifestRuntime {
     readonly cognito?: ManifestCognito;
     // (undocumented)
     readonly external?: boolean;
+    readonly managed?: ManifestManagedRuntime;
+    readonly models?: readonly ManifestModel[];
     // (undocumented)
     readonly telemetry?: ManifestTelemetry;
 }
@@ -804,8 +899,8 @@ export function withUser<T>(ctx: UserContext, fn: () => T): T;
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:1206:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:1206:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1258:9 - (ae-forgotten-export) The symbol "ExpressLikeReq" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:1258:9 - (ae-forgotten-export) The symbol "ExpressLikeRes" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

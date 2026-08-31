@@ -160,7 +160,6 @@ describe('CognitoLogin.fromManifest', () => {
     expect(login.issuer).toBeUndefined();
     expect(login.authorizeUrl({ state: 's', codeChallenge: 'c' })).toContain('response_type=code');
   });
-
   it('lança quando o manifesto não tem runtime.cognito, apontando o passo que falta', () => {
     expect(() => CognitoLogin.fromManifest(manifesto(), { env: {} })).toThrow(
       /provisionar_cognito/,

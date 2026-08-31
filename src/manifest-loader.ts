@@ -38,6 +38,8 @@ import type {
   ItemKind,
   ManifestOwner,
   ManifestCognito,
+  ManifestManagedRuntime,
+  ManifestModel,
   ManifestRuntime,
   ManifestTelemetry,
   ResourceAttributes,
@@ -276,6 +278,75 @@ function parseCognito(value: unknown, origin: string): ManifestCognito | undefin
   };
 }
 
+/**
+ * Managed-runtime block (`runtime.managed`), written by the portal/MCP when an
+ * external agent opts into the platform's managed AgentCore runtime. All four
+ * required fields (`endpoint`, `agentId`, `tokenUrl`) must be present once the
+ * block exists — same "no half-written block" rule as `runtime.cognito`: a
+ * partial block would fail later, opaquely, at invoke time.
+ */
+function parseManaged(value: unknown, origin: string): ManifestManagedRuntime | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    fail(
+      origin,
+      `field "runtime.managed" must be an object when present, got ${describeType(value)}.`,
+    );
+  }
+  const endpoint = requireNonEmptyString(value.endpoint, 'runtime.managed.endpoint', origin);
+  const agentId = requireNonEmptyString(value.agentId, 'runtime.managed.agentId', origin);
+  const tokenUrl = requireNonEmptyString(value.tokenUrl, 'runtime.managed.tokenUrl', origin);
+  const scope = optionalNonEmptyString(value.scope, 'runtime.managed.scope', origin);
+  return {
+    endpoint,
+    agentId,
+    tokenUrl,
+    ...(scope !== undefined ? { scope } : {}),
+  };
+}
+
+/**
+ * A single entry of `runtime.models` — a portal-written snapshot of the
+ * tenant's enabled Bedrock catalog. Only `modelId` is required; `name`,
+ * `provider` and `streaming` mirror whatever the catalog API returned at
+ * snapshot time and are omitted when absent (never placeholder-filled).
+ */
+function parseModelEntry(value: unknown, index: number, origin: string): ManifestModel {
+  if (!isRecord(value)) {
+    fail(origin, `field "runtime.models[${index}]" must be an object, got ${describeType(value)}.`);
+  }
+  const modelId = requireNonEmptyString(
+    value.modelId,
+    `runtime.models[${index}].modelId`,
+    origin,
+  );
+  const name = optionalNonEmptyString(value.name, `runtime.models[${index}].name`, origin);
+  const provider = optionalNonEmptyString(
+    value.provider,
+    `runtime.models[${index}].provider`,
+    origin,
+  );
+  const streaming = optionalBoolean(
+    value.streaming,
+    `runtime.models[${index}].streaming`,
+    origin,
+  );
+  return {
+    modelId,
+    ...(name !== undefined ? { name } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(streaming !== undefined ? { streaming } : {}),
+  };
+}
+
+function parseModels(value: unknown, origin: string): ManifestModel[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    fail(origin, `field "runtime.models" must be an array when present, got ${describeType(value)}.`);
+  }
+  return value.map((item, index) => parseModelEntry(item, index, origin));
+}
+
 function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) {
@@ -284,10 +355,14 @@ function parseRuntime(value: unknown, origin: string): ManifestRuntime | undefin
   const external = optionalBoolean(value.external, 'runtime.external', origin);
   const telemetry = parseTelemetry(value.telemetry, origin);
   const cognito = parseCognito(value.cognito, origin);
+  const managed = parseManaged(value.managed, origin);
+  const models = parseModels(value.models, origin);
   return {
     ...(external !== undefined ? { external } : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
     ...(cognito !== undefined ? { cognito } : {}),
+    ...(managed !== undefined ? { managed } : {}),
+    ...(models !== undefined ? { models } : {}),
   };
 }
 

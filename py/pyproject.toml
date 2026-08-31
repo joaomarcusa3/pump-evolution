@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pump-evolution"
-version = "0.0.9"
+version = "0.1.0"
 description = "Plug-and-play Python telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Python parity of @topaz-ia/pump-evolution. Zero internal cta-* dependencies."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,6 +37,8 @@ dev = [
     "starlette>=0.37",
     "itsdangerous>=2.0",
     "httpx>=0.27",
+    # Os testes do ManagedAgentClient sao async (vieram do trabalho do Joao).
+    "pytest-asyncio>=0.24",
 ]
 
 [project.urls]
@@ -46,3 +48,7 @@ Repository = "https://gitlab.topazevolution.com/topaz-ia/templates/sdk.git"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pump_evolution*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

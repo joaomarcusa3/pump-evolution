@@ -303,7 +303,6 @@ describe('runtime.cognito', () => {
     expect(m.runtime?.cognito?.clientId).toBe('5o9kpobp3c7kudnvm4onvjpgr0');
     expect(m.runtime?.cognito?.issuer).toBeUndefined();
   });
-
   it('recusa identityProviders que não seja array de strings', () => {
     expect(() =>
       loadManifest({

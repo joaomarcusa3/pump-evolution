@@ -34,6 +34,8 @@ from .types import (
     AgentManifest,
     ManifestOwner,
     ManifestCognito,
+    ManifestManagedRuntime,
+    ManifestModel,
     ManifestRuntime,
     ManifestTelemetry,
     ResourceAttributes,
@@ -235,6 +237,59 @@ def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
     )
 
 
+def _parse_managed(value: Any, origin: str) -> Optional[ManifestManagedRuntime]:
+    """Bloco `runtime.managed`, escrito pelo portal/MCP quando um agente externo
+    opta pela hospedagem no runtime AgentCore gerenciado. Os três campos são
+    OBRIGATÓRIOS quando o bloco existe — mesma regra de "sem bloco pela metade"
+    do `runtime.cognito`."""
+    if value is None:
+        return None
+    if not _is_record(value):
+        _fail(
+            origin,
+            f'field "runtime.managed" must be an object when present, got {_describe_type(value)}.',
+        )
+    endpoint = _require_non_empty_string(value.get("endpoint"), "runtime.managed.endpoint", origin)
+    agent_id = _require_non_empty_string(value.get("agentId"), "runtime.managed.agentId", origin)
+    token_url = _require_non_empty_string(value.get("tokenUrl"), "runtime.managed.tokenUrl", origin)
+    scope = _optional_non_empty_string(value.get("scope"), "runtime.managed.scope", origin)
+    return ManifestManagedRuntime(
+        endpoint=endpoint, agent_id=agent_id, token_url=token_url, scope=scope
+    )
+
+
+def _parse_model_entry(value: Any, index: int, origin: str) -> ManifestModel:
+    if not _is_record(value):
+        _fail(
+            origin,
+            f'field "runtime.models[{index}]" must be an object, got {_describe_type(value)}.',
+        )
+    model_id = _require_non_empty_string(
+        value.get("modelId"), f"runtime.models[{index}].modelId", origin
+    )
+    name = _optional_non_empty_string(value.get("name"), f"runtime.models[{index}].name", origin)
+    provider = _optional_non_empty_string(
+        value.get("provider"), f"runtime.models[{index}].provider", origin
+    )
+    streaming = _optional_boolean(
+        value.get("streaming"), f"runtime.models[{index}].streaming", origin
+    )
+    return ManifestModel(model_id=model_id, name=name, provider=provider, streaming=streaming)
+
+
+def _parse_models(value: Any, origin: str) -> Optional[List[ManifestModel]]:
+    """Snapshot de `runtime.models`, escrito pelo portal a partir do catálogo
+    Bedrock ao vivo — não é lista estática mantida à mão."""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        _fail(
+            origin,
+            f'field "runtime.models" must be an array when present, got {_describe_type(value)}.',
+        )
+    return [_parse_model_entry(item, index, origin) for index, item in enumerate(value)]
+
+
 def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:
     if value is None:
         return None
@@ -243,7 +298,11 @@ def _parse_runtime(value: Any, origin: str) -> Optional[ManifestRuntime]:
     external = _optional_boolean(value.get("external"), "runtime.external", origin)
     telemetry = _parse_telemetry(value.get("telemetry"), origin)
     cognito = _parse_cognito(value.get("cognito"), origin)
-    return ManifestRuntime(external=external, telemetry=telemetry, cognito=cognito)
+    managed = _parse_managed(value.get("managed"), origin)
+    models = _parse_models(value.get("models"), origin)
+    return ManifestRuntime(
+        external=external, telemetry=telemetry, cognito=cognito, managed=managed, models=models
+    )
 
 
 # ─── Entrada de validação ──────────────────────────────────────────────────────
