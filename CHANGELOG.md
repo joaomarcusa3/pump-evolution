@@ -7,6 +7,51 @@ Todas as mudanças relevantes deste pacote são documentadas aqui. O formato seg
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-29
+
+Primeira versao que reune as duas linhagens do SDK: o trabalho do GitLab
+(correcoes de MCP, portoes de pipeline, `CognitoLogin`) e o do GitHub do Joao
+(`ManagedAgentClient`, catalogo de modelos, manifesto como fonte unica). Minor
+porque a superficie publica cresce; nada existente quebra.
+
+### Added
+
+- **`ManagedAgentClient`** (ADR-0068) — hospedagem no runtime AgentCore
+  gerenciado da plataforma, TypeScript e Python. `fromManifest()` le
+  `runtime.managed`, que o `cta_factory_hospedar_runtime` ja grava; o scope de
+  invoke e derivado (`cta-consumers/invoke:agent:<agentId>`) quando nao vem
+  declarado. A credencial de invoke **nunca** entra no manifesto — e show-once e
+  vive no ambiente.
+- **Selecao dinamica de modelo** — `invoke` aceita override de `modelId` por
+  invocacao, nas duas linguagens.
+- **`runtime.models`** no manifesto — snapshot que o portal escreve do catalogo
+  Bedrock habilitado na conta. E snapshot, nao lista mantida a mao: a
+  disponibilidade autoritativa continua atras da API.
+- **`runtime.managed`** — `ManifestManagedRuntime` e validacao nos dois loaders.
+
+### Changed
+
+- `runtime.cognito` e `runtime.managed` fazem do manifesto a fonte unica de
+  configuracao: o dev nao copia mais `COGNITO_*` nem `PUMP_MANAGED_*` a mao.
+
+### Notas da reconciliacao
+
+As duas linhagens divergiram porque o trabalho do GitLab (!15-!22) foi reaplicado
+no GitHub por conteudo, nao por merge de historico. Este merge estabelece o
+ancestral comum — as proximas sincronizacoes passam a ser baratas.
+
+Onde as duas versoes conflitaram (36 blocos em 14 arquivos), o criterio foi:
+
+- **nosso lado** onde a !23 tocou. A versao do GitHub exigia
+  `runtime.cognito.issuer` e `scopes`, e por isso rejeitava o `manifest.yaml` do
+  `tpz-cel926-cmdb-jira-assets` que esta em producao — o mesmo defeito que a
+  validacao contra o conector real revelou aqui;
+- **o lado dele** em tudo que e adicao nova.
+
+O codigo que veio do GitHub nunca havia passado pelos portoes desta pipeline.
+Passou agora: typecheck, lint, 268 testes TypeScript e 71 Python, relatorio de
+API regenerado.
+
 ## [0.0.9] - 2026-08-28
 
 ### Fixed
@@ -42,7 +87,6 @@ Validação ponta a ponta contra o Cognito real (pool `us-east-1_5ppMHdWW7`, con
 O `scopes_supported` do discovery inclui `phone`, que o App Client **não** aceita.
 O SDK escapa disso por usar os scopes do manifesto (os do client) e nunca os do
 discovery — é a mesma pegadinha que derruba proxies OAuth com `invalid_scope`.
-
 ## [0.0.8] - 2026-08-28
 
 ### Added
