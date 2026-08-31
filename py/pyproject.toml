@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pump-evolution"
-version = "0.0.8"
+version = "0.1.0"
 description = "Plug-and-play Python telemetry SDK for AI agents and MCP servers — emits governed usage telemetry (identity, tokens, tools, compliance, OWASP security) to Control Tower AI as OpenTelemetry GenAI spans. Python parity of @topaz-ia/pump-evolution. Zero internal cta-* dependencies."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,7 +25,6 @@ dependencies = [
 bedrock = ["boto3>=1.34.0"]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.24",
     "mypy>=1.8",
     "ruff>=0.5",
     "types-PyYAML>=6.0",
@@ -38,6 +37,8 @@ dev = [
     "starlette>=0.37",
     "itsdangerous>=2.0",
     "httpx>=0.27",
+    # Os testes do ManagedAgentClient sao async (vieram do trabalho do Joao).
+    "pytest-asyncio>=0.24",
 ]
 
 [project.urls]

@@ -149,6 +149,23 @@ def test_secret_vem_do_ambiente_manifesto_e_git_safe() -> None:
     assert isinstance(login, CognitoLogin)
 
 
+def test_aceita_manifesto_antigo_sem_issuer() -> None:
+    """Regressao real: o manifesto do tpz-cel926-cmdb-jira-assets, em producao,
+    foi gerado antes de a plataforma emitir `issuer`."""
+    login = CognitoLogin.from_manifest(
+        manifesto(
+            {
+                "domain": DOMAIN,
+                "clientId": CLIENT_ID,
+                "redirectUri": REDIRECT,
+                "scopes": "openid email profile",
+            }
+        ),
+        env={},
+    )
+    assert login.issuer is None
+    assert "response_type=code" in login.authorize_url(state="s", code_challenge="c")
+
 def test_from_manifest_sem_bloco_aponta_o_passo_que_falta() -> None:
     with pytest.raises(ValueError, match="provisionar_cognito"):
         CognitoLogin.from_manifest(manifesto(), env={})
@@ -157,7 +174,7 @@ def test_from_manifest_sem_bloco_aponta_o_passo_que_falta() -> None:
 # ─── Manifesto: validacao do bloco ────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("campo", ["domain", "issuer", "clientId", "redirectUri", "scopes"])
+@pytest.mark.parametrize("campo", ["domain", "clientId", "redirectUri"])
 def test_manifesto_falha_nomeando_o_campo_ausente(campo: str) -> None:
     parcial = dict(COGNITO_COMPLETO)
     del parcial[campo]

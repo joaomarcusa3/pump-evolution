@@ -199,10 +199,14 @@ def _optional_string_list(value: Any, field: str, origin: str) -> Optional[list]
 def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
     """Bloco `runtime.cognito`, escrito pela plataforma ao provisionar o login.
 
-    Os cinco primeiros campos são OBRIGATÓRIOS quando o bloco existe. Um bloco
-    pela metade é pior que nenhum: o login falharia depois, no Hosted UI, com
-    mensagem opaca — em vez de aqui, no load, nomeando o campo. A plataforma
-    recusa emitir o bloco sem eles, então um parcial significa edição à mão.
+    `domain`, `clientId` e `redirectUri` sao OBRIGATORIOS quando o bloco existe
+    — sem qualquer um deles o login aponta pra lugar nenhum, e falhar aqui
+    (nomeando o campo) e melhor que falhar depois no Hosted UI.
+
+    `issuer` e `scopes` sao OPCIONAIS, e isso e deliberado: manifestos escritos
+    antes de a plataforma emitir `issuer` estao em producao agora. Recusa-los
+    quebraria um conector no ar para ganhar uma checagem de claim, enquanto o
+    `aud` ja amarra o token a este App Client.
     """
     if value is None:
         return None
@@ -213,14 +217,14 @@ def _parse_cognito(value: Any, origin: str) -> Optional[ManifestCognito]:
         )
     return ManifestCognito(
         domain=_require_non_empty_string(value.get("domain"), "runtime.cognito.domain", origin),
-        issuer=_require_non_empty_string(value.get("issuer"), "runtime.cognito.issuer", origin),
+        issuer=_optional_non_empty_string(value.get("issuer"), "runtime.cognito.issuer", origin),
         client_id=_require_non_empty_string(
             value.get("clientId"), "runtime.cognito.clientId", origin
         ),
         redirect_uri=_require_non_empty_string(
             value.get("redirectUri"), "runtime.cognito.redirectUri", origin
         ),
-        scopes=_require_non_empty_string(value.get("scopes"), "runtime.cognito.scopes", origin),
+        scopes=_optional_non_empty_string(value.get("scopes"), "runtime.cognito.scopes", origin),
         identity_providers=_optional_string_list(
             value.get("identityProviders"), "runtime.cognito.identityProviders", origin
         ),
